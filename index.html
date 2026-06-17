@@ -125,6 +125,22 @@
     border-radius: 1px; transition: width 0.2s ease;
   }
 
+  /* ===== TOAST NOTIFICATION ===== */
+  #toast {
+    position: fixed; top: calc(50% + 60px); left: 50%; transform: translate(-50%, -50%);
+    z-index: 80; padding: 12px 28px; text-align: center;
+    font-size: 14px; font-weight: 250; letter-spacing: 0.06em;
+    color: var(--cyan-neon);
+    background: var(--glass-bg);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--glass-border);
+    border-radius: 24px;
+    opacity: 0; visibility: hidden;
+    transition: opacity 0.5s ease, visibility 0.5s ease;
+    pointer-events: none;
+  }
+  #toast.show { opacity: 1; visibility: visible; }
+
   /* ===== FPS ===== */
   #fps-display {
     position: fixed; bottom: 20px; right: 24px; z-index: 10;
@@ -264,6 +280,9 @@
   </div>
   <div class="loading-text" id="loading-text">正在连接宇宙意识...</div>
 </div>
+
+<!-- Toast notification -->
+<div id="toast"></div>
 
 <!-- Gesture HUD -->
 <div id="gesture-hud" class="glass-panel" style="opacity:0; visibility:hidden;">
@@ -1567,7 +1586,7 @@ function startMediaPipePreload() {
     } catch (e) {
       const msg = e.message || String(e);
       console.error('Model load error:', msg);
-      updateModelStatus(`加载失败: ${msg.slice(0, 40)}`);
+      showToast(`模型加载失败: ${msg.slice(0, 30)}`, 8000);
       throw e;
     }
 
@@ -2064,31 +2083,39 @@ document.addEventListener('click', () => {
   if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
 }, { once: true });
 
+// ==================== TOAST ====================
+const toast = document.getElementById('toast');
+let toastTimer = null;
+function showToast(msg, duration = 3000) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  if (duration > 0) toastTimer = setTimeout(() => toast.classList.remove('show'), duration);
+}
+
 // ==================== CAMERA PROMPT ====================
 startCameraBtn.addEventListener('click', async () => {
   startCameraBtn.disabled = true;
   startCameraBtn.textContent = '启动中...';
 
   try {
-    // Start camera immediately (fast, ~200ms)
+    // Camera first (fast)
     await setupCamera();
     loadState.camera = 1;
-    cameraPrompt.classList.add('hidden');
-    updateModelStatus('模型加载中...');
 
-    // Model may still be loading — that's OK, nebula + ambient particles show
-    // Hide loading screen once camera is ready
+    // Hide prompts, show nebula
+    cameraPrompt.classList.add('hidden');
     loadingScreen.classList.add('fade-out');
 
-    // Wait for model (may already be ready from preload)
+    // Model might still be loading — show toast
     if (!gestureRecognizer) {
-      updateModelStatus('等待手势模型...');
+      showToast('模型加载中...', 0); // persistent until model ready
       await setupMediaPipe();
     }
 
     loadState.ready = true;
+    showToast('✨ 已就绪 — 试试做手势吧', 4000);
     updateModelStatus('已就绪 ✨', true);
-    setTimeout(() => { if (modelStatusEl) modelStatusEl.textContent = ''; }, 3000);
 
     initAudio();
     showHints();
@@ -2096,7 +2123,7 @@ startCameraBtn.addEventListener('click', async () => {
     console.error('Startup error:', e);
     startCameraBtn.disabled = false;
     startCameraBtn.textContent = '重试';
-    updateModelStatus('启动失败: ' + e.message.slice(0, 30));
+    showToast('启动失败: ' + e.message.slice(0, 30), 6000);
   }
 });
 

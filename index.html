@@ -1532,10 +1532,14 @@ function startMediaPipePreload() {
     console.log('⚡ Preloading MediaPipe (same-origin)...');
     updateModelStatus('正在加载识别引擎...');
 
-    // Stage 1: Load JS bundle + WASM from same origin
-    const { GestureRecognizer, FilesetResolver } = await import('./mp/vision_bundle.mjs');
+    // Stage 1: Load JS+WASM from jsDelivr CDN (professionally served, not our copy)
+    const { GestureRecognizer, FilesetResolver } = await import(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/vision_bundle.mjs'
+    );
     updateModelStatus('正在初始化视觉模块...');
-    visionInstance = await FilesetResolver.forVisionTasks('./mp/');
+    visionInstance = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm'
+    );
     loadState.wasm = 1;
 
     // Stage 2: Load gesture model — fetch ourselves, pass as buffer

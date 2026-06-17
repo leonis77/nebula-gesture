@@ -1538,24 +1538,33 @@ function startMediaPipePreload() {
     visionInstance = await FilesetResolver.forVisionTasks('./mp/');
     loadState.wasm = 1;
 
-    // Stage 2: Load gesture model via MediaPipe's native downloader
-    updateModelStatus('正在加载手势模型...');
+    // Stage 2: Load gesture model — fetch ourselves, pass as buffer
+    updateModelStatus('正在下载手势模型...');
     const modelStartTime = Date.now();
 
     try {
+      // Fetch model file ourselves (more reliable than modelAssetPath)
+      const resp = await fetch('./gesture_recognizer.task');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const buffer = await resp.arrayBuffer();
+      console.log(`   Model downloaded: ${(buffer.byteLength/1024/1024).toFixed(1)}MB`);
+
+      updateModelStatus('正在初始化手势识别...');
       gestureRecognizer = await Promise.race([
         GestureRecognizer.createFromOptions(visionInstance, {
-          baseOptions: { modelAssetPath: './gesture_recognizer.task', delegate: 'GPU' },
+          baseOptions: { modelAssetBuffer: new Uint8Array(buffer), delegate: 'GPU' },
           runningMode: 'VIDEO', numHands: 2,
           minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
         }),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('模型加载超时')), 60000)
+          setTimeout(() => reject(new Error('初始化超时(60s)')), 60000)
         ),
       ]);
     } catch (e) {
-      updateModelStatus('模型加载失败，请刷新重试');
-      throw new Error('模型加载失败: ' + e.message);
+      const msg = e.message || String(e);
+      console.error('Model load error:', msg);
+      updateModelStatus(`加载失败: ${msg.slice(0, 40)}`);
+      throw e;
     }
 
     loadState.model = 1;

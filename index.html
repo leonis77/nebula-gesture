@@ -58,7 +58,8 @@
 
   video#v {
     position: fixed; top: 0; left: 0;
-    width: 1px; height: 1px; opacity: 0.01; pointer-events: none;
+    width: 320px; height: 240px;
+    opacity: 0.001; pointer-events: none; z-index: -1;
     transform: scaleX(-1);
   }
 
@@ -267,7 +268,7 @@
 <body>
 
 <canvas id="c"></canvas>
-<video id="v" autoplay playsinline></video>
+<video id="v" autoplay playsinline muted></video>
 
 <!-- Loading Screen -->
 <div id="loading-screen">
@@ -1525,18 +1526,25 @@ const handStates = [new SmoothedHand(), new SmoothedHand()];
 let loadState = { wasm: 0, model: 0, camera: 0, ready: false };
 
 async function setupCamera() {
+  console.log('📷 Requesting camera...');
   loadState.camera = 0.2;
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      width: { ideal: CFG.camW },
-      height: { ideal: CFG.camH },
-      facingMode: 'user',
-    },
-    audio: false,
-  });
+
+  const stream = await Promise.race([
+    navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: CFG.camW }, height: { ideal: CFG.camH }, facingMode: 'user' },
+      audio: false,
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('摄像头权限超时(30s)')), 30000)),
+  ]);
+  console.log('📷 Stream obtained');
+
   video.srcObject = stream;
   await video.play();
-  await new Promise(r => { video.onloadeddata = r; });
+  console.log('📷 Video playing, waiting for data...');
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('视频数据超时(10s)')), 10000);
+    video.onloadeddata = () => { clearTimeout(timeout); resolve(); };
+  });
   loadState.camera = 1;
   console.log('📷 Camera ready:', video.videoWidth, 'x', video.videoHeight);
 }
@@ -2125,10 +2133,15 @@ startCameraBtn.addEventListener('click', async () => {
     initAudio();
     showHints();
   } catch (e) {
-    console.error('Startup error:', e);
+    const msg = e.message || String(e);
+    console.error('Startup error:', msg);
     startCameraBtn.disabled = false;
     startCameraBtn.textContent = '重试';
-    showToast('启动失败: ' + e.message.slice(0, 30), 6000);
+    startCameraBtn.style.color = '#FF4081';
+    startCameraBtn.style.borderColor = '#FF4081';
+    // Show error both on button and in toast
+    startCameraBtn.textContent = msg.slice(0, 20);
+    showToast('启动失败: ' + msg, 10000);
   }
 });
 

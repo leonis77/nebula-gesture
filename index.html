@@ -1,0 +1,2177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#020018">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>NEBULA | 星云粒子交互</title>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/"
+  }
+}
+</script>
+
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --deep-space: #020018;
+    --cyan-neon: #00E5FF;
+    --cyan-dark: #0091EA;
+    --magenta: #FF4081;
+    --gold: #FFD740;
+    --white-core: #FFFFFF;
+    --glass-bg: rgba(10, 10, 40, 0.35);
+    --glass-border: rgba(0, 229, 255, 0.12);
+    --glass-glow: rgba(0, 229, 255, 0.06);
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+  }
+
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: var(--deep-space);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+    font-weight: 250; color: rgba(255,255,255,0.85);
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none; user-select: none;
+    touch-action: manipulation;
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
+  }
+
+  canvas#c {
+    display: block; position: fixed; inset: 0;
+    width: 100%; height: 100%;
+    transition: width 0.4s ease, height 0.4s ease;
+  }
+
+  video#v {
+    display: none; position: absolute; top: 0; left: 0;
+    transform: scaleX(-1); /* mirror front camera */
+  }
+
+  /* ===== GLASS PANEL BASE ===== */
+  .glass-panel {
+    background: var(--glass-bg);
+    backdrop-filter: blur(24px) saturate(1.4);
+    -webkit-backdrop-filter: blur(24px) saturate(1.4);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    box-shadow: 0 -1px 20px var(--glass-glow), 0 4px 24px rgba(0,0,0,0.4);
+    transition: opacity 0.8s cubic-bezier(0.16,1,0.3,1), transform 0.4s cubic-bezier(0.16,1,0.3,1);
+  }
+
+  /* ===== LOADING SCREEN ===== */
+  #loading-screen {
+    position: fixed; inset: 0; z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: var(--deep-space);
+    transition: opacity 0.8s ease, visibility 0.8s ease;
+  }
+  #loading-screen.hidden {
+    opacity: 0; visibility: hidden; pointer-events: none;
+  }
+  #loading-screen .title {
+    font-size: clamp(32px, 5vw, 56px); font-weight: 200; letter-spacing: 0.15em;
+    color: var(--cyan-neon); text-shadow: 0 0 40px rgba(0,229,255,0.3);
+    margin-bottom: 8px;
+  }
+  #loading-screen .subtitle {
+    font-size: 14px; font-weight: 100; letter-spacing: 0.12em;
+    color: rgba(255,255,255,0.4); margin-bottom: 32px;
+  }
+  #loading-screen .progress-ring {
+    position: relative; width: 60px; height: 60px; margin-bottom: 16px;
+  }
+  #loading-screen .progress-ring svg { transform: rotate(-90deg); }
+  #loading-screen .progress-ring circle {
+    fill: none; stroke-width: 2;
+  }
+  #loading-screen .progress-ring .bg { stroke: rgba(0,229,255,0.12); }
+  #loading-screen .progress-ring .fg {
+    stroke: var(--cyan-neon);
+    stroke-dasharray: 175.93; stroke-dashoffset: 175.93;
+    transition: stroke-dashoffset 0.3s ease;
+    filter: drop-shadow(0 0 6px rgba(0,229,255,0.6));
+  }
+  #loading-screen .loading-text {
+    font-size: 12px; font-weight: 200; letter-spacing: 0.08em;
+    color: rgba(255,255,255,0.35);
+  }
+
+  /* ===== GESTURE HUD ===== */
+  #gesture-hud {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 10;
+    padding: 10px 20px; display: flex; align-items: center; gap: 12px;
+    min-width: 200px; justify-content: center;
+  }
+  #gesture-hud .emoji { font-size: 22px; line-height: 1; }
+  #gesture-hud .label { font-size: 13px; font-weight: 250; letter-spacing: 0.05em; }
+  #gesture-hud .confidence-bar {
+    width: 80px; height: 1px; background: rgba(255,255,255,0.1); border-radius: 1px; overflow: hidden;
+  }
+  #gesture-hud .confidence-fill {
+    height: 100%; background: linear-gradient(90deg, var(--cyan-dark), var(--cyan-neon));
+    border-radius: 1px; transition: width 0.2s ease;
+  }
+
+  /* ===== FPS ===== */
+  #fps-display {
+    position: fixed; bottom: 20px; right: 24px; z-index: 10;
+    font-size: 10px; font-weight: 300; letter-spacing: 0.05em;
+    color: rgba(255,255,255,0.2); transition: color 0.4s ease, opacity 0.4s ease;
+  }
+  #fps-display.warning { color: var(--magenta); opacity: 0.7; }
+
+  /* ===== HINT PANEL ===== */
+  #hint-panel {
+    position: fixed; bottom: 100px; left: 24px; z-index: 10;
+    padding: 16px 20px; max-width: 280px;
+    transition: opacity 0.6s ease, transform 0.4s cubic-bezier(0.16,1,0.3,1), visibility 0.6s ease;
+  }
+  #hint-panel.hidden { opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(10px); }
+  #hint-panel h3 {
+    font-size: 12px; font-weight: 300; letter-spacing: 0.08em;
+    color: rgba(255,255,255,0.5); margin-bottom: 10px;
+  }
+  #hint-panel .hint-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+    font-size: 12px; font-weight: 250; letter-spacing: 0.03em;
+  }
+  #hint-panel .hint-row .emoji { font-size: 16px; width: 24px; text-align: center; }
+  #hint-panel .hint-row .desc { color: rgba(255,255,255,0.5); flex: 1; }
+  #hint-panel .shortcuts {
+    margin-top: 10px; font-size: 10px; color: rgba(255,255,255,0.25); letter-spacing: 0.05em;
+  }
+
+  /* ===== TOUCH BUTTONS ===== */
+  #touch-controls {
+    position: fixed; z-index: 10; display: flex; gap: 12px;
+    bottom: calc(20px + var(--safe-bottom));
+    right: calc(20px + var(--safe-right));
+  }
+  .touch-btn {
+    width: 48px; height: 48px; border-radius: 12px;
+    background: var(--glass-bg); border: 1px solid var(--glass-border);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    color: var(--cyan-neon); font-size: 20px; line-height: 48px; text-align: center;
+    cursor: pointer; opacity: 0.25; transition: opacity 0.4s ease, transform 0.2s ease;
+    display: none; /* hidden on desktop by default */
+  }
+  .touch-btn:active { opacity: 0.9; transform: scale(0.95); }
+  .touch-btn.visible { display: block; }
+
+  /* ===== AUDIO TOGGLE ===== */
+  #audio-toggle {
+    position: fixed; top: calc(20px + var(--safe-top)); right: calc(24px + var(--safe-right));
+    z-index: 10; font-size: 18px; cursor: pointer; opacity: 0.5; color: var(--cyan-neon);
+    transition: opacity 0.3s ease, color 0.3s ease; line-height: 1;
+  }
+  #audio-toggle:hover { opacity: 1; }
+  #audio-toggle.muted { opacity: 0.2; color: rgba(255,255,255,0.3); }
+
+  /* ===== CAMERA PROMPT ===== */
+  #camera-prompt {
+    position: fixed; inset: 0; z-index: 90;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(2,0,24,0.85);
+    transition: opacity 0.5s ease, visibility 0.5s ease;
+  }
+  #camera-prompt.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+  #camera-prompt .card {
+    padding: 40px; text-align: center; max-width: 360px;
+  }
+  #camera-prompt .icon { font-size: 48px; margin-bottom: 16px; }
+  #camera-prompt h2 {
+    font-size: 18px; font-weight: 250; letter-spacing: 0.08em;
+    color: var(--cyan-neon); margin-bottom: 8px;
+  }
+  #camera-prompt p {
+    font-size: 13px; font-weight: 200; color: rgba(255,255,255,0.5);
+    margin-bottom: 24px; line-height: 1.6;
+  }
+  #camera-prompt .privacy {
+    font-size: 10px; color: rgba(255,255,255,0.25); margin-top: 12px;
+  }
+  #camera-prompt button {
+    padding: 12px 32px; border-radius: 24px; border: 1px solid var(--cyan-neon);
+    background: rgba(0,229,255,0.1); color: var(--cyan-neon);
+    font-size: 14px; font-weight: 300; letter-spacing: 0.08em;
+    cursor: pointer; transition: background 0.3s ease, box-shadow 0.3s ease;
+    font-family: inherit;
+  }
+  #camera-prompt button:hover {
+    background: rgba(0,229,255,0.2);
+    box-shadow: 0 0 24px rgba(0,229,255,0.2);
+  }
+
+  /* ===== RESPONSIVE ===== */
+  @media (max-width: 430px) {
+    #gesture-hud { bottom: 32px; padding: 8px 14px; min-width: 160px; }
+    #gesture-hud .emoji { font-size: 18px; }
+    #gesture-hud .label { font-size: 11px; }
+    #gesture-hud .confidence-bar { width: 50px; }
+    #hint-panel { bottom: 80px; left: 12px; max-width: 220px; padding: 12px 14px; }
+    #hint-panel .hint-row { font-size: 10px; gap: 6px; }
+    .touch-btn.visible { display: block; }
+    #fps-display { bottom: 12px; right: 12px; font-size: 9px; }
+  }
+  @media (max-width: 375px) {
+    #gesture-hud { bottom: 28px; }
+    #hint-panel { max-width: 180px; }
+  }
+  @media (min-width: 768px) {
+    #gesture-hud { bottom: 48px; }
+    #fps-display { bottom: 28px; right: 32px; }
+  }
+  @media (min-width: 1024px) {
+    .touch-btn.visible { display: none; } /* desktop: hide touch buttons */
+  }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+<video id="v" autoplay playsinline></video>
+
+<!-- Loading Screen -->
+<div id="loading-screen">
+  <div class="title">NEBULA</div>
+  <div class="subtitle">星云粒子交互体验</div>
+  <div class="progress-ring">
+    <svg width="60" height="60" viewBox="0 0 60 60">
+      <circle class="bg" cx="30" cy="30" r="28"/>
+      <circle class="fg" id="progress-circle" cx="30" cy="30" r="28"/>
+    </svg>
+  </div>
+  <div class="loading-text" id="loading-text">正在连接宇宙意识...</div>
+</div>
+
+<!-- Gesture HUD -->
+<div id="gesture-hud" class="glass-panel" style="opacity:0; visibility:hidden;">
+  <span class="emoji" id="gesture-emoji">✋</span>
+  <span class="label" id="gesture-label">--</span>
+  <div class="confidence-bar">
+    <div class="confidence-fill" id="confidence-fill" style="width:0%"></div>
+  </div>
+</div>
+
+<!-- FPS -->
+<div id="fps-display">--</div>
+
+<!-- Hint Panel -->
+<div id="hint-panel" class="glass-panel">
+  <h3>试试这些手势</h3>
+  <div class="hint-row"><span class="emoji">✋</span><span class="desc">张开手掌 · 粒子聚拢</span></div>
+  <div class="hint-row"><span class="emoji">✊</span><span class="desc">握拳 · 粒子爆发</span></div>
+  <div class="hint-row"><span class="emoji">☝️</span><span class="desc">食指向上 · 火花喷射</span></div>
+  <div class="hint-row"><span class="emoji">✌️</span><span class="desc">V字 · 粒子分流</span></div>
+  <div class="shortcuts" id="shortcut-hints">H 隐藏提示 &nbsp;|&nbsp; F 全屏</div>
+</div>
+
+<!-- Touch Controls (mobile only) -->
+<div id="touch-controls">
+  <div class="touch-btn" id="btn-fullscreen" title="全屏">⛶</div>
+  <div class="touch-btn" id="btn-hint" title="提示">?</div>
+</div>
+
+<!-- Audio Toggle -->
+<div id="audio-toggle" title="静音/取消静音">♪</div>
+
+<!-- Camera Prompt -->
+<div id="camera-prompt">
+  <div class="card glass-panel">
+    <div class="icon">📷</div>
+    <h2>请允许摄像头权限</h2>
+    <p>NEBULA 通过摄像头识别手势，<br>让你用双手与粒子互动</p>
+    <button id="start-camera-btn">开启摄像头</button>
+    <p class="privacy">🔒 视频数据完全在本地处理，不会上传</p>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+// ==================== DEVICE DETECTION ====================
+function detectDeviceProfile() {
+  const ua = navigator.userAgent;
+  const memory = navigator.deviceMemory || 4;
+  const cores = navigator.hardwareConcurrency || 4;
+  const isMobile = /Mobi|Android/i.test(ua);
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isSafari = /Safari/i.test(ua) && !/Chrome/i.test(ua);
+  const totalPixels = screen.width * screen.height * (window.devicePixelRatio || 1);
+
+  let score = 0;
+  score += Math.min(memory * 10, 40);
+  score += Math.min(cores * 5, 30);
+  score += isMobile ? 0 : 30;
+  if (totalPixels > 4_000_000) score -= 10;
+  if (isSafari && isIOS) score -= 5;
+
+  if (score >= 70) return 'ultra';
+  if (score >= 50) return 'high';
+  if (score >= 35) return 'medium';
+  return 'low';
+}
+
+function isTouchDevice() {
+  return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+}
+
+const DEVICE = {
+  profile: detectDeviceProfile(),
+  isTouch: isTouchDevice(),
+  isIOS: /iPhone|iPad|iPod/i.test(navigator.userAgent),
+  isSafari: /Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent),
+  isMobile: /Mobi|Android/i.test(navigator.userAgent),
+};
+
+// ==================== CONFIGURATION ====================
+const CONFIGS = {
+  ultra:  { ambient:5000, interactive:2000, trailLen:8, maxLines:800,  rings:5, bloom:1.5, dpr:2,   detectFps:30, camW:640, camH:480, chromaticAberration:true,  nebulaLayers:3, handDetail:'full' },
+  high:   { ambient:4000, interactive:1500, trailLen:6, maxLines:500,  rings:4, bloom:1.2, dpr:2,   detectFps:30, camW:640, camH:480, chromaticAberration:true,  nebulaLayers:3, handDetail:'full' },
+  medium: { ambient:2500, interactive:1000, trailLen:4, maxLines:300,  rings:2, bloom:0.8, dpr:1.5, detectFps:25, camW:480, camH:360, chromaticAberration:false, nebulaLayers:2, handDetail:'simple' },
+  low:    { ambient:1500, interactive:600,  trailLen:2, maxLines:0,    rings:1, bloom:0.5, dpr:1,   detectFps:20, camW:320, camH:240, chromaticAberration:false, nebulaLayers:1, handDetail:'fingertips' },
+};
+const CFG = CONFIGS[DEVICE.profile];
+
+console.log(`🌟 NEBULA | Device: ${DEVICE.profile} | Touch: ${DEVICE.isTouch} | Ambient: ${CFG.ambient} | Interactive: ${CFG.interactive}`);
+
+// ==================== DOM REFS ====================
+const canvas = document.getElementById('c');
+const video = document.getElementById('v');
+const loadingScreen = document.getElementById('loading-screen');
+const progressCircle = document.getElementById('progress-circle');
+const loadingText = document.getElementById('loading-text');
+const gestureHud = document.getElementById('gesture-hud');
+const gestureEmoji = document.getElementById('gesture-emoji');
+const gestureLabel = document.getElementById('gesture-label');
+const confidenceFill = document.getElementById('confidence-fill');
+const fpsDisplay = document.getElementById('fps-display');
+const hintPanel = document.getElementById('hint-panel');
+const audioToggle = document.getElementById('audio-toggle');
+const cameraPrompt = document.getElementById('camera-prompt');
+const startCameraBtn = document.getElementById('start-camera-btn');
+const btnFullscreen = document.getElementById('btn-fullscreen');
+const btnHint = document.getElementById('btn-hint');
+const shortcutHints = document.getElementById('shortcut-hints');
+
+// ==================== THREE.JS SETUP ====================
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, CFG.dpr));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(
+  window.innerWidth > window.innerHeight ? 60 : 50,
+  window.innerWidth / Math.max(window.innerHeight, 1),
+  0.5, 50
+);
+camera.position.set(0, 0, 12);
+
+// ==================== GLSL SHADERS ====================
+
+// -- Simplex 3D Noise for Nebula --
+const NOISE_GLSL = /* glsl */`
+  vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+  vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+  vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+  vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+  float snoise(vec3 v) {
+    const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+    const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+    vec3 i = floor(v + dot(v, C.yyy));
+    vec3 x0 = v - i + dot(i, C.xxx);
+    vec3 g = step(x0.yzx, x0.xyz);
+    vec3 l = 1.0 - g;
+    vec3 i1 = min(g.xyz, l.zxy);
+    vec3 i2 = max(g.xyz, l.zxy);
+    vec3 x1 = x0 - i1 + C.xxx;
+    vec3 x2 = x0 - i2 + C.yyy;
+    vec3 x3 = x0 - D.yyy;
+    i = mod289(i);
+    vec4 p = permute(permute(permute(
+      i.z + vec4(0.0, i1.z, i2.z, 1.0))
+      + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+      + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+    float n_ = 0.142857142857;
+    vec3 ns = n_ * D.wyz - D.xzx;
+    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+    vec4 x_ = floor(j * ns.z);
+    vec4 y_ = floor(j - 7.0 * x_);
+    vec4 x = x_ * ns.x + ns.yyyy;
+    vec4 y = y_ * ns.x + ns.yyyy;
+    vec4 h = 1.0 - abs(x) - abs(y);
+    vec4 b0 = vec4(x.xy, y.xy);
+    vec4 b1 = vec4(x.zw, y.zw);
+    vec4 s0 = floor(b0)*2.0 + 1.0;
+    vec4 s1 = floor(b1)*2.0 + 1.0;
+    vec4 sh = -step(h, vec4(0.0));
+    vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+    vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+    vec3 p0 = vec3(a0.xy, h.x);
+    vec3 p1 = vec3(a0.zw, h.y);
+    vec3 p2 = vec3(a1.xy, h.z);
+    vec3 p3 = vec3(a1.zw, h.w);
+    vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+    p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+    m = m * m;
+    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+  }
+
+  float fbm(vec3 p, int octaves) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    float persistence = 0.6;
+    for (int i = 0; i < 5; i++) {
+      if (i >= octaves) break;
+      value += amplitude * snoise(p * frequency);
+      frequency *= 2.0;
+      amplitude *= persistence;
+    }
+    return value;
+  }
+`;
+
+// -- Nebula Background Shader --
+const NEBULA_VERTEX = /* glsl */`
+  varying vec3 vWorldPos;
+  varying vec3 vViewDir;
+  void main() {
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    vWorldPos = worldPos.xyz;
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vViewDir = normalize(-mvPosition.xyz);
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`;
+
+const NEBULA_FRAGMENT = /* glsl */`
+  varying vec3 vWorldPos;
+  varying vec3 vViewDir;
+  uniform float uTime;
+  uniform int uLayers;
+
+  ${NOISE_GLSL}
+
+  void main() {
+    vec3 dir = normalize(vWorldPos);
+
+    // Layer 1: large-scale cyan nebula clouds
+    float n1 = fbm(dir * 3.0 + uTime * 0.02, uLayers);
+    // Layer 2: medium-scale purple/magenta nebula
+    float n2 = fbm(dir * 5.0 + vec3(0.5, 1.2, 0.8) + uTime * 0.015, uLayers);
+    // Layer 3: fine star-like details
+    float n3 = snoise(dir * 12.0 + uTime * 0.04);
+
+    // Cyan nebula
+    float cyanMask = smoothstep(0.0, 0.8, n1 * 0.7 + 0.5);
+    vec3 cyanNebula = mix(
+      vec3(0.008, 0.0, 0.094),   // deep space
+      vec3(0.0, 0.72, 0.92),     // cyan
+      cyanMask * 0.35
+    );
+
+    // Purple nebula
+    float purpleMask = smoothstep(0.1, 0.7, n2 * 0.6 + 0.4);
+    vec3 purpleNebula = mix(
+      vec3(0.008, 0.0, 0.094),
+      vec3(0.49, 0.3, 0.98),     // purple
+      purpleMask * 0.3
+    );
+
+    // Stars
+    float starField = smoothstep(0.92, 1.0, n3);
+    vec3 stars = vec3(starField * 0.4);
+
+    vec3 color = vec3(0.008, 0.0, 0.094) + cyanNebula + purpleNebula + stars;
+
+    // Vignette
+    float vignette = 1.0 - length(vViewDir.xy) * 0.35;
+    color *= vignette;
+
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+// -- Particle Shader --
+const PARTICLE_VERTEX = /* glsl */`
+  attribute float size;
+  attribute vec3 customColor;
+  varying vec3 vColor;
+  varying float vAlpha;
+  varying float vDist;
+  void main() {
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_PointSize = size * (280.0 / -mvPosition.z);
+    gl_Position = projectionMatrix * mvPosition;
+    vColor = customColor;
+    vDist = -mvPosition.z;
+    vAlpha = smoothstep(2.0, 10.0, -mvPosition.z);
+  }
+`;
+
+const PARTICLE_FRAGMENT = /* glsl */`
+  varying vec3 vColor;
+  varying float vAlpha;
+  varying float vDist;
+  void main() {
+    vec2 uv = gl_PointCoord - 0.5;
+    float dist = length(uv) * 2.0;
+    // Double-gaussian glow
+    float core = exp(-dist * dist * 2.8);
+    float glow = exp(-dist * dist * 7.0) * 0.55;
+    float alpha = core + glow;
+    if (alpha < 0.015) discard;
+    // Edge softening (hexagonal approximation)
+    float edge = 1.0 - smoothstep(0.7, 1.0, dist);
+    alpha *= edge;
+    gl_FragColor = vec4(vColor * (1.0 + glow * 0.8), alpha * vAlpha);
+  }
+`;
+
+// -- Chromatic Aberration Shader --
+const CHROMATIC_ABERRATION = /* glsl */`
+  uniform sampler2D tDiffuse;
+  uniform float uTime;
+  varying vec2 vUv;
+
+  void main() {
+    vec2 center = vUv - 0.5;
+    float dist = length(center);
+    float aberration = dist * 0.012;
+
+    float r = texture2D(tDiffuse, vUv + center * aberration * 1.2).r;
+    float g = texture2D(tDiffuse, vUv).g;
+    float b = texture2D(tDiffuse, vUv - center * aberration * 1.2).b;
+
+    // Vignette
+    float vignette = 1.0 - dist * 0.5;
+
+    gl_FragColor = vec4(r, g, b, 1.0) * vignette;
+  }
+`;
+
+// ==================== NEBULA BACKGROUND ====================
+const nebulaGeo = new THREE.SphereGeometry(28, 64, 32);
+const nebulaMat = new THREE.ShaderMaterial({
+  vertexShader: NEBULA_VERTEX,
+  fragmentShader: NEBULA_FRAGMENT,
+  uniforms: {
+    uTime: { value: 0 },
+    uLayers: { value: CFG.nebulaLayers },
+  },
+  side: THREE.BackSide,
+  depthWrite: false,
+});
+const nebulaSphere = new THREE.Mesh(nebulaGeo, nebulaMat);
+nebulaSphere.renderOrder = -1;
+scene.add(nebulaSphere);
+
+// ==================== POST PROCESSING ====================
+const composer = new EffectComposer(renderer);
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  CFG.bloom,
+  0.5,
+  0.05
+);
+composer.addPass(bloomPass);
+
+let chromaticPass = null;
+if (CFG.chromaticAberration) {
+  chromaticPass = new ShaderPass(
+    new THREE.ShaderMaterial({
+      uniforms: { tDiffuse: { value: null }, uTime: { value: 0 } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+      fragmentShader: CHROMATIC_ABERRATION,
+    })
+  );
+  composer.addPass(chromaticPass);
+}
+
+const outputPass = new OutputPass();
+composer.addPass(outputPass);
+
+// ==================== PARTICLE SYSTEM ====================
+function createParticleSystem(count) {
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('customColor', new THREE.BufferAttribute(colors, 3));
+  geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+  const material = new THREE.ShaderMaterial({
+    vertexShader: PARTICLE_VERTEX,
+    fragmentShader: PARTICLE_FRAGMENT,
+    uniforms: {},
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const points = new THREE.Points(geometry, material);
+  points.renderOrder = 1;
+  scene.add(points);
+
+  // CPU-side data: [px, py, pz, vx, vy, vz, life] per particle
+  const cpuData = new Float32Array(count * 7);
+
+  return { points, geometry, positions, colors, sizes, count, cpuData, material };
+}
+
+// Initialize ambient particles in sphere shell
+function initAmbientParticles(system) {
+  const { positions, colors, sizes, cpuData, count } = system;
+  for (let i = 0; i < count; i++) {
+    const r = 7 + Math.random() * 12;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const px = r * Math.sin(phi) * Math.cos(theta);
+    const py = r * Math.sin(phi) * Math.sin(theta);
+    const pz = r * Math.cos(phi);
+
+    const o7 = i * 7;
+    cpuData[o7] = px; cpuData[o7+1] = py; cpuData[o7+2] = pz;
+    const speed = 0.002 + Math.random() * 0.008;
+    cpuData[o7+3] = -Math.sin(theta) * speed;
+    cpuData[o7+4] = (Math.random() - 0.5) * speed * 0.5;
+    cpuData[o7+5] = Math.cos(theta) * speed;
+    cpuData[o7+6] = Math.random();
+
+    positions[i*3] = px; positions[i*3+1] = py; positions[i*3+2] = pz;
+
+    // cyan gradient
+    const t = r / 19;
+    colors[i*3] = 0.0 + t * 0.15;
+    colors[i*3+1] = 0.3 + t * 0.55;
+    colors[i*3+2] = 0.5 + t * 0.5;
+
+    sizes[i] = 2.0 + Math.random() * 3.0;
+  }
+}
+
+// Initialize interactive particles random
+function initInteractiveParticles(system) {
+  const { positions, colors, sizes, cpuData, count } = system;
+  for (let i = 0; i < count; i++) {
+    const px = (Math.random() - 0.5) * 8;
+    const py = (Math.random() - 0.5) * 8;
+    const pz = (Math.random() - 0.5) * 8;
+
+    const o7 = i * 7;
+    cpuData[o7] = px; cpuData[o7+1] = py; cpuData[o7+2] = pz;
+    cpuData[o7+3] = 0; cpuData[o7+4] = 0; cpuData[o7+5] = 0;
+    cpuData[o7+6] = Math.random();
+
+    positions[i*3] = px; positions[i*3+1] = py; positions[i*3+2] = pz;
+
+    const t = Math.random();
+    colors[i*3] = 0.0 + t * 0.3;
+    colors[i*3+1] = 0.55 + t * 0.3;
+    colors[i*3+2] = 0.75 + t * 0.25;
+
+    sizes[i] = 1.5 + Math.random() * 4.0;
+  }
+}
+
+// Upload CPU data to GPU
+function uploadParticleData(system) {
+  const { positions, colors, sizes, cpuData, count } = system;
+  for (let i = 0; i < count; i++) {
+    const o7 = i * 7;
+    positions[i*3] = cpuData[o7];
+    positions[i*3+1] = cpuData[o7+1];
+    positions[i*3+2] = cpuData[o7+2];
+
+    const pulse = 1.0 + Math.sin(cpuData[o7+6] * Math.PI * 2) * 0.3;
+    sizes[i] = system.baseSizes ? system.baseSizes[i] * pulse : (2.0 + Math.random() * 0.1) * pulse;
+  }
+  system.geometry.attributes.position.needsUpdate = true;
+  system.geometry.attributes.customColor.needsUpdate = true;
+  system.geometry.attributes.size.needsUpdate = true;
+}
+
+// ==================== CREATE PARTICLE SYSTEMS ====================
+const ambientSystem = createParticleSystem(CFG.ambient);
+initAmbientParticles(ambientSystem);
+// Store base sizes for pulsing
+ambientSystem.baseSizes = new Float32Array(CFG.ambient);
+for (let i = 0; i < CFG.ambient; i++) {
+  ambientSystem.baseSizes[i] = 2.0 + Math.random() * 3.0;
+}
+
+const interactiveSystem = createParticleSystem(CFG.interactive);
+initInteractiveParticles(interactiveSystem);
+interactiveSystem.baseSizes = new Float32Array(CFG.interactive);
+for (let i = 0; i < CFG.interactive; i++) {
+  interactiveSystem.baseSizes[i] = 1.5 + Math.random() * 4.0;
+}
+
+// ==================== TRAIL SYSTEM ====================
+const trailSystem = {
+  history: [], // ring buffer: [particleIdx][frameIdx] = {x,y,z}
+  trailPoints: null,
+  trailPositions: null,
+  trailColors: null,
+  trailSizes: null,
+  head: 0,
+  enabled: CFG.trailLen > 0,
+};
+
+if (trailSystem.enabled) {
+  const totalTrailPoints = CFG.interactive * CFG.trailLen;
+  trailSystem.history = new Array(CFG.interactive);
+  for (let i = 0; i < CFG.interactive; i++) {
+    trailSystem.history[i] = new Array(CFG.trailLen);
+    for (let j = 0; j < CFG.trailLen; j++) {
+      trailSystem.history[i][j] = { x: 0, y: 0, z: 0 };
+    }
+  }
+
+  const tGeo = new THREE.BufferGeometry();
+  trailSystem.trailPositions = new Float32Array(totalTrailPoints * 3);
+  trailSystem.trailColors = new Float32Array(totalTrailPoints * 3);
+  trailSystem.trailSizes = new Float32Array(totalTrailPoints);
+  tGeo.setAttribute('position', new THREE.BufferAttribute(trailSystem.trailPositions, 3));
+  tGeo.setAttribute('customColor', new THREE.BufferAttribute(trailSystem.trailColors, 3));
+  tGeo.setAttribute('size', new THREE.BufferAttribute(trailSystem.trailSizes, 1));
+
+  const tMat = new THREE.ShaderMaterial({
+    vertexShader: PARTICLE_VERTEX,
+    fragmentShader: PARTICLE_FRAGMENT,
+    uniforms: {},
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  trailSystem.trailPoints = new THREE.Points(tGeo, tMat);
+  trailSystem.trailPoints.renderOrder = 0;
+  trailSystem.trailPoints.frustumCulled = false;
+  scene.add(trailSystem.trailPoints);
+}
+
+function updateTrails(particleSystem, dt) {
+  if (!trailSystem.enabled) return;
+  const { cpuData, count } = particleSystem;
+  const tl = CFG.trailLen;
+
+  // Shift history and record new positions
+  for (let i = 0; i < count; i++) {
+    const hist = trailSystem.history[i];
+    // Shift older entries forward
+    for (let j = tl - 1; j > 0; j--) {
+      hist[j].x = hist[j-1].x;
+      hist[j].y = hist[j-1].y;
+      hist[j].z = hist[j-1].z;
+    }
+    // Record current position
+    const o7 = i * 7;
+    hist[0].x = cpuData[o7];
+    hist[0].y = cpuData[o7+1];
+    hist[0].z = cpuData[o7+2];
+  }
+
+  // Upload to GPU
+  for (let i = 0; i < count; i++) {
+    const hist = trailSystem.history[i];
+    for (let j = 0; j < tl; j++) {
+      const idx = (i * tl + j);
+      const alpha = Math.max(0, 1.0 - j / tl); // fade along trail
+      trailSystem.trailPositions[idx*3] = hist[j].x;
+      trailSystem.trailPositions[idx*3+1] = hist[j].y;
+      trailSystem.trailPositions[idx*3+2] = hist[j].z;
+      trailSystem.trailColors[idx*3] = 0.0;
+      trailSystem.trailColors[idx*3+1] = 0.55 * alpha;
+      trailSystem.trailColors[idx*3+2] = 0.8 * alpha;
+      trailSystem.trailSizes[idx] = (3.0 - j * (2.5 / tl)) * alpha;
+    }
+  }
+  trailSystem.trailPoints.geometry.attributes.position.needsUpdate = true;
+  trailSystem.trailPoints.geometry.attributes.customColor.needsUpdate = true;
+  trailSystem.trailPoints.geometry.attributes.size.needsUpdate = true;
+}
+
+// ==================== HAND WIREFRAME ====================
+// MediaPipe hand topology: which landmarks to connect
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],    // thumb
+  [0,5],[5,6],[6,7],[7,8],    // index
+  [0,9],[9,10],[10,11],[11,12], // middle
+  [0,13],[13,14],[14,15],[15,16], // ring
+  [0,17],[17,18],[18,19],[19,20], // pinky
+  [5,9],[9,13],[13,17],        // palm connections
+];
+
+let handWireLines = null;
+let handJointDots = null;
+const HAND_JOINTS = [4,8,12,16,20]; // fingertips only for simple mode
+const HAND_ALL_JOINTS = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20];
+
+function createHandWireframe() {
+  // Lines for wireframe (2 hands, 21 connections each)
+  const maxLines = 2 * HAND_CONNECTIONS.length;
+  const lineGeo = new THREE.BufferGeometry();
+  const linePositions = new Float32Array(maxLines * 2 * 3); // 2 points per line
+  lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
+  const lineMat = new THREE.LineBasicMaterial({
+    color: 0x00E5FF,
+    transparent: true,
+    opacity: 0.5,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  handWireLines = new THREE.LineSegments(lineGeo, lineMat);
+  handWireLines.renderOrder = 2;
+  handWireLines.frustumCulled = false;
+  handWireLines.visible = false;
+  scene.add(handWireLines);
+
+  // Dots for joints
+  const jointCount = CFG.handDetail === 'fingertips' ? HAND_JOINTS.length : HAND_ALL_JOINTS.length;
+  const totalJoints = 2 * jointCount;
+  const dotGeo = new THREE.BufferGeometry();
+  const dotPositions = new Float32Array(totalJoints * 3);
+  const dotColors = new Float32Array(totalJoints * 3);
+  const dotSizes = new Float32Array(totalJoints);
+  dotGeo.setAttribute('position', new THREE.BufferAttribute(dotPositions, 3));
+  dotGeo.setAttribute('customColor', new THREE.BufferAttribute(dotColors, 3));
+  dotGeo.setAttribute('size', new THREE.BufferAttribute(dotSizes, 1));
+
+  const dotMat = new THREE.ShaderMaterial({
+    vertexShader: PARTICLE_VERTEX,
+    fragmentShader: PARTICLE_FRAGMENT,
+    uniforms: {},
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  handJointDots = new THREE.Points(dotGeo, dotMat);
+  handJointDots.renderOrder = 3;
+  handJointDots.frustumCulled = false;
+  handJointDots.visible = false;
+  scene.add(handJointDots);
+}
+
+createHandWireframe();
+
+function updateHandWireframe() {
+  let anyHand = false;
+  const joints = CFG.handDetail === 'fingertips' ? HAND_JOINTS : HAND_ALL_JOINTS;
+
+  for (let hi = 0; hi < 2; hi++) {
+    const hand = handStates[hi];
+    if (!hand.present || !hand._rawLandmarks) continue;
+    anyHand = true;
+    const lm = hand._rawLandmarks;
+
+    // Update wireframe lines
+    const linePos = handWireLines.geometry.attributes.position.array;
+    for (let ci = 0; ci < HAND_CONNECTIONS.length; ci++) {
+      const [a, b] = HAND_CONNECTIONS[ci];
+      const baseIdx = (hi * HAND_CONNECTIONS.length + ci) * 6;
+      linePos[baseIdx] = (lm[a].x - 0.5) * 14;
+      linePos[baseIdx+1] = (0.5 - lm[a].y) * 11;
+      linePos[baseIdx+2] = (lm[a].z + 0.05) * 15;
+      linePos[baseIdx+3] = (lm[b].x - 0.5) * 14;
+      linePos[baseIdx+4] = (0.5 - lm[b].y) * 11;
+      linePos[baseIdx+5] = (lm[b].z + 0.05) * 15;
+    }
+    handWireLines.geometry.attributes.position.needsUpdate = true;
+
+    // Update joint dots
+    const dotPos = handJointDots.geometry.attributes.position.array;
+    const dotCol = handJointDots.geometry.attributes.customColor.array;
+    const dotSiz = handJointDots.geometry.attributes.size.array;
+    for (let ji = 0; ji < joints.length; ji++) {
+      const j = joints[ji];
+      const idx = (hi * joints.length + ji) * 3;
+      dotPos[idx] = (lm[j].x - 0.5) * 14;
+      dotPos[idx+1] = (0.5 - lm[j].y) * 11;
+      dotPos[idx+2] = (lm[j].z + 0.05) * 15;
+      dotCol[idx] = 1.0; dotCol[idx+1] = 0.25; dotCol[idx+2] = 0.5; // magenta
+      dotSiz[ji + hi * joints.length] = 5.0;
+    }
+    handJointDots.geometry.attributes.position.needsUpdate = true;
+    handJointDots.geometry.attributes.customColor.needsUpdate = true;
+    handJointDots.geometry.attributes.size.needsUpdate = true;
+  }
+
+  handWireLines.visible = anyHand;
+  handJointDots.visible = anyHand;
+}
+
+// ==================== ENERGY RINGS ====================
+const RING_PARTICLES = 200;
+const MAX_RINGS = CFG.rings;
+let activeRings = [];
+
+function spawnEnergyRing(x, y, z) {
+  if (activeRings.length >= MAX_RINGS) {
+    // Remove oldest ring
+    const old = activeRings.shift();
+    scene.remove(old.points);
+    old.points.geometry.dispose();
+    old.points.material.dispose();
+  }
+
+  const ringPositions = new Float32Array(RING_PARTICLES * 3);
+  const ringColors = new Float32Array(RING_PARTICLES * 3);
+  const ringSizes = new Float32Array(RING_PARTICLES);
+
+  const ringGeo = new THREE.BufferGeometry();
+  ringGeo.setAttribute('position', new THREE.BufferAttribute(ringPositions, 3));
+  ringGeo.setAttribute('customColor', new THREE.BufferAttribute(ringColors, 3));
+  ringGeo.setAttribute('size', new THREE.BufferAttribute(ringSizes, 1));
+
+  const ringMat = new THREE.ShaderMaterial({
+    vertexShader: PARTICLE_VERTEX,
+    fragmentShader: PARTICLE_FRAGMENT,
+    uniforms: {},
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const ringPoints = new THREE.Points(ringGeo, ringMat);
+  ringPoints.renderOrder = 2;
+  ringPoints.frustumCulled = false;
+  scene.add(ringPoints);
+
+  const ring = {
+    points: ringPoints,
+    positions: ringPositions,
+    colors: ringColors,
+    sizes: ringSizes,
+    centerX: x, centerY: y, centerZ: z,
+    radius: 0.3,
+    life: 1.0,
+    maxLife: 1.5,
+  };
+
+  // Initialize ring particles in a circle
+  for (let i = 0; i < RING_PARTICLES; i++) {
+    const angle = (i / RING_PARTICLES) * Math.PI * 2;
+    ringPositions[i*3] = x + Math.cos(angle) * ring.radius;
+    ringPositions[i*3+1] = y + Math.sin(angle) * ring.radius;
+    ringPositions[i*3+2] = z;
+    ringColors[i*3] = 1.0; ringColors[i*3+1] = 1.0; ringColors[i*3+2] = 1.0;
+    ringSizes[i] = 2.5;
+  }
+  ringGeo.attributes.position.needsUpdate = true;
+  ringGeo.attributes.customColor.needsUpdate = true;
+  ringGeo.attributes.size.needsUpdate = true;
+
+  activeRings.push(ring);
+}
+
+function updateEnergyRings(dt) {
+  for (let r = activeRings.length - 1; r >= 0; r--) {
+    const ring = activeRings[r];
+    ring.life -= dt;
+    if (ring.life <= 0) {
+      scene.remove(ring.points);
+      ring.points.geometry.dispose();
+      ring.points.material.dispose();
+      activeRings.splice(r, 1);
+      continue;
+    }
+
+    ring.radius += dt * 5.0; // expand
+    const alpha = ring.life / ring.maxLife;
+
+    for (let i = 0; i < RING_PARTICLES; i++) {
+      const angle = (i / RING_PARTICLES) * Math.PI * 2 + ring.life * 2;
+      ring.positions[i*3] = ring.centerX + Math.cos(angle) * ring.radius;
+      ring.positions[i*3+1] = ring.centerY + Math.sin(angle) * ring.radius;
+      ring.positions[i*3+2] = ring.centerZ + Math.sin(angle * 3) * 0.3;
+      ring.colors[i*3] = alpha;
+      ring.colors[i*3+1] = 0.8 * alpha;
+      ring.colors[i*3+2] = alpha;
+      ring.sizes[i] = 2.5 * alpha;
+    }
+    ring.points.geometry.attributes.position.needsUpdate = true;
+    ring.points.geometry.attributes.customColor.needsUpdate = true;
+    ring.points.geometry.attributes.size.needsUpdate = true;
+  }
+}
+
+// ==================== CONSTELLATION LINES ====================
+let constellationLines = null;
+let constellationPositions = null;
+
+if (CFG.maxLines > 0) {
+  const clGeo = new THREE.BufferGeometry();
+  constellationPositions = new Float32Array(CFG.maxLines * 2 * 3);
+  clGeo.setAttribute('position', new THREE.BufferAttribute(constellationPositions, 3));
+  clGeo.setDrawRange(0, 0);
+  const clMat = new THREE.LineBasicMaterial({
+    color: 0x00E5FF,
+    transparent: true,
+    opacity: 0.12,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  constellationLines = new THREE.LineSegments(clGeo, clMat);
+  constellationLines.renderOrder = 0;
+  constellationLines.frustumCulled = false;
+  scene.add(constellationLines);
+}
+
+function updateConstellationLines(particleSystem) {
+  if (!constellationLines || CFG.maxLines === 0) return;
+  const { cpuData, count } = particleSystem;
+  const maxDist = 2.5;
+  const maxLines = CFG.maxLines;
+
+  // Simple spatial grid (cell size = maxDist)
+  const cellSize = maxDist;
+  const grid = new Map();
+
+  for (let i = 0; i < count; i++) {
+    const o7 = i * 7;
+    const cx = Math.floor(cpuData[o7] / cellSize);
+    const cy = Math.floor(cpuData[o7+1] / cellSize);
+    const cz = Math.floor(cpuData[o7+2] / cellSize);
+    const key = `${cx},${cy},${cz}`;
+    if (!grid.has(key)) grid.set(key, []);
+    grid.get(key).push(i);
+  }
+
+  // Find close pairs
+  const closePairs = [];
+  const checked = new Set();
+
+  for (const [key, indices] of grid) {
+    const [cx, cy, cz] = key.split(',').map(Number);
+
+    // Check this cell and 13 neighboring cells (half of 26, to avoid duplicates)
+    for (let dx = 0; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          if (dx === 0 && (dy < 0 || (dy === 0 && dz <= 0))) continue;
+          const nKey = `${cx+dx},${cy+dy},${cz+dz}`;
+          const nIndices = grid.get(nKey);
+          if (!nIndices) continue;
+
+          for (const i of indices) {
+            const o7i = i * 7;
+            for (const j of nIndices) {
+              if (i === j) continue;
+              const pairKey = Math.min(i,j) + '_' + Math.max(i,j);
+              if (checked.has(pairKey)) continue;
+              checked.add(pairKey);
+
+              const o7j = j * 7;
+              const d = dist3d(
+                cpuData[o7i], cpuData[o7i+1], cpuData[o7i+2],
+                cpuData[o7j], cpuData[o7j+1], cpuData[o7j+2]
+              );
+              if (d < maxDist) {
+                closePairs.push({ i, j, dist: d });
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Sort by distance and limit
+  closePairs.sort((a, b) => a.dist - b.dist);
+  const numLines = Math.min(closePairs.length, maxLines);
+
+  for (let l = 0; l < numLines; l++) {
+    const { i, j } = closePairs[l];
+    const o7i = i * 7, o7j = j * 7;
+    const lp = l * 6;
+    constellationPositions[lp] = cpuData[o7i];
+    constellationPositions[lp+1] = cpuData[o7i+1];
+    constellationPositions[lp+2] = cpuData[o7i+2];
+    constellationPositions[lp+3] = cpuData[o7j];
+    constellationPositions[lp+4] = cpuData[o7j+1];
+    constellationPositions[lp+5] = cpuData[o7j+2];
+  }
+
+  constellationLines.geometry.setDrawRange(0, numLines * 2);
+  constellationLines.geometry.attributes.position.needsUpdate = true;
+}
+
+// ==================== ENERGY BRIDGE ====================
+let bridgeParticles = null;
+let bridgeSystem = null;
+
+function createEnergyBridge() {
+  const count = 300;
+  bridgeSystem = createParticleSystem(count);
+  for (let i = 0; i < count; i++) {
+    const t = i / count;
+    bridgeSystem.cpuData[i*7] = (Math.random()-0.5)*2;
+    bridgeSystem.cpuData[i*7+1] = (Math.random()-0.5)*2;
+    bridgeSystem.cpuData[i*7+2] = (Math.random()-0.5)*2;
+    bridgeSystem.positions[i*3] = 0;
+    bridgeSystem.colors[i*3] = 0.5;
+    bridgeSystem.colors[i*3+1] = 0.8;
+    bridgeSystem.colors[i*3+2] = 1.0;
+    bridgeSystem.sizes[i] = 2.0 + Math.random() * 2;
+  }
+  bridgeSystem.baseSizes = new Float32Array(count);
+  for (let i = 0; i < count; i++) bridgeSystem.baseSizes[i] = 2.0 + Math.random() * 2;
+  bridgeSystem.points.visible = false;
+}
+
+createEnergyBridge();
+
+function updateEnergyBridge(dt) {
+  const h0 = handStates[0], h1 = handStates[1];
+  const bothPresent = h0.present && h1.present && bridgeSystem;
+
+  if (!bridgeSystem) return;
+  bridgeSystem.points.visible = bothPresent;
+
+  if (!bothPresent) return;
+
+  const { cpuData, count } = bridgeSystem;
+  const cx1 = h0.center.x, cy1 = h0.center.y, cz1 = h0.center.z;
+  const cx2 = h1.center.x, cy2 = h1.center.y, cz2 = h1.center.z;
+  const midX = (cx1 + cx2) / 2, midY = (cy1 + cy2) / 2, midZ = (cz1 + cz2) / 2;
+  const bridgeDist = dist3d(cx1, cy1, cz1, cx2, cy2, cz2);
+
+  for (let i = 0; i < count; i++) {
+    const t = i / count;
+    const o7 = i * 7;
+
+    // Bezier curve between hands
+    const u = 1 - t;
+    const cpx = midX, cpy = midY + bridgeDist * 0.3, cpz = midZ;
+    const px = u*u*cx1 + 2*u*t*cpx + t*t*cx2;
+    const py = u*u*cy1 + 2*u*t*cpy + t*t*cy2;
+    const pz = u*u*cz1 + 2*u*t*cpz + t*t*cz2;
+
+    // Add random offset for thickness
+    const offsetX = (Math.random() - 0.5) * 0.3;
+    const offsetY = (Math.random() - 0.5) * 0.3;
+    const offsetZ = (Math.random() - 0.5) * 0.3;
+
+    cpuData[o7] = px + offsetX;
+    cpuData[o7+1] = py + offsetY;
+    cpuData[o7+2] = pz + offsetZ;
+    cpuData[o7+3] = 0; cpuData[o7+4] = 0; cpuData[o7+5] = 0;
+    cpuData[o7+6] = (cpuData[o7+6] + dt * 0.2) % 1.0;
+
+    bridgeSystem.positions[i*3] = cpuData[o7];
+    bridgeSystem.positions[i*3+1] = cpuData[o7+1];
+    bridgeSystem.positions[i*3+2] = cpuData[o7+2];
+    bridgeSystem.colors[i*3] = 0.3 + t * 0.7;
+    bridgeSystem.colors[i*3+1] = 0.6 + t * 0.4;
+    bridgeSystem.colors[i*3+2] = 0.8 + t * 0.2;
+  }
+  uploadParticleData(bridgeSystem);
+}
+
+// ==================== UTILITY ====================
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function dist3d(ax, ay, az, bx, by, bz) {
+  const dx = ax - bx, dy = ay - by, dz = az - bz;
+  return Math.sqrt(dx*dx + dy*dy + dz*dz);
+}
+
+// ==================== GLOBAL STATE ====================
+let smoothedHands = [
+  { present: false, center: {x:0,y:0,z:5}, fingertip: {x:0,y:0,z:5}, gesture: 'None', confidence: 0, prevGesture: 'None' },
+  { present: false, center: {x:0,y:0,z:5}, fingertip: {x:0,y:0,z:5}, gesture: 'None', confidence: 0, prevGesture: 'None' },
+];
+let gestureSwitchTime = 0;
+let gestureComboCount = 0;
+let lastGestureSwitchTime = 0;
+let noHandTimer = 0;
+let ambientMode = false;
+let handEnterTransition = 0;
+let totalEnergy = 0;
+
+// ==================== PARTICLE UPDATE ====================
+function computeGestureForces(px, py, pz, hand) {
+  const dx = hand.center.x - px;
+  const dy = hand.center.y - py;
+  const dz = hand.center.z - pz;
+  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) + 0.001;
+  const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+
+  const gesture = hand.gesture;
+
+  switch (gesture) {
+    case 'Open_Palm':
+      if (dist > 3.0) {
+        const s = 0.018 / (dist * 0.5);
+        return { fx: nx*s, fy: ny*s, fz: nz*s };
+      } else if (dist > 0.5) {
+        const orbit = 0.035;
+        return { fx: -nz*orbit + nx*0.003, fy: ny*0.003, fz: nx*orbit + nz*0.003 };
+      } else {
+        const s = -0.08 * (1 - dist/0.5);
+        return { fx: nx*s, fy: ny*s, fz: nz*s };
+      }
+    case 'Closed_Fist':
+      const rs = -0.07 / (dist*dist*0.3 + 0.1);
+      return { fx: nx*rs, fy: ny*rs, fz: nz*rs };
+    case 'Pointing_Up':
+      const tdx = hand.fingertip.x - px;
+      const tdy = hand.fingertip.y - py;
+      const tdz = hand.fingertip.z - pz;
+      const td = Math.sqrt(tdx*tdx + tdy*tdy + tdz*tdz) + 0.001;
+      if (td < 2.0) {
+        // respawn at fingertip
+        return {
+          fx: 0, fy: 0, fz: 0,
+          respawn: {
+            x: hand.fingertip.x + (Math.random()-0.5)*0.3,
+            y: hand.fingertip.y + (Math.random()-0.5)*0.3,
+            z: hand.fingertip.z + (Math.random()-0.5)*0.3,
+            vx: (Math.random()-0.5)*0.04,
+            vy: 0.05 + Math.random()*0.08,
+            vz: (Math.random()-0.5)*0.04,
+          }
+        };
+      }
+      const as = 0.015 / (td*0.5 + 0.1);
+      return { fx: tdx*as, fy: tdy*as, fz: tdz*as };
+    case 'Victory':
+      const sa = 0.6;
+      const fxv = Math.cos(sa)*nx - Math.sin(sa)*nz;
+      const fzv = Math.sin(sa)*nx + Math.cos(sa)*nz;
+      const vs = 0.025 / (dist*0.3 + 0.2);
+      return { fx: fxv*vs, fy: ny*vs*0.3, fz: fzv*vs };
+    case 'ILoveYou':
+      // Spiral upward
+      const spirX = -nz * 0.04 + nx * 0.005;
+      const spirZ = nx * 0.04 + nz * 0.005;
+      const spirY = 0.03 / (dist*0.3 + 0.3);
+      return { fx: spirX, fy: spirY, fz: spirZ };
+    case 'Thumb_Up':
+      return { fx: nx*0.005, fy: 0.03/(dist*0.4+0.2), fz: nz*0.005 };
+    case 'Thumb_Down':
+      return { fx: nx*0.005, fy: -0.03/(dist*0.4+0.2), fz: nz*0.005 };
+    default: // None — gentle attraction
+      const ws = 0.004 / (dist*0.5 + 0.3);
+      return { fx: nx*ws, fy: ny*ws, fz: nz*ws };
+  }
+}
+
+function updateParticles(system, hands, dt, isAmbient) {
+  const { cpuData, count } = system;
+  const DAMPING = 0.97;
+  const MAX_SPEED = 0.18;
+  const time = performance.now() * 0.001;
+
+  for (let i = 0; i < count; i++) {
+    const o7 = i * 7;
+    let px = cpuData[o7], py = cpuData[o7+1], pz = cpuData[o7+2];
+    let vx = cpuData[o7+3], vy = cpuData[o7+4], vz = cpuData[o7+5];
+
+    let tfx = 0, tfy = 0, tfz = 0;
+    let hasRespawn = false;
+
+    for (const hand of hands) {
+      if (!hand.present) continue;
+      const f = computeGestureForces(px, py, pz, hand);
+      if (f.respawn && !isAmbient) {
+        // Interactive particles respawn at fingertip
+        px = f.respawn.x; py = f.respawn.y; pz = f.respawn.z;
+        vx = f.respawn.vx; vy = f.respawn.vy; vz = f.respawn.vz;
+        hasRespawn = true;
+      } else {
+        tfx += f.fx || 0; tfy += f.fy || 0; tfz += f.fz || 0;
+      }
+    }
+
+    // Two-hand bridge
+    if (hands[0]?.present && hands[1]?.present) {
+      const h1 = hands[0].center, h2 = hands[1].center;
+      const midX = (h1.x + h2.x) / 2, midY = (h1.y + h2.y) / 2, midZ = (h1.z + h2.z) / 2;
+      const bdx = midX - px, bdy = midY - py, bdz = midZ - pz;
+      const bd = Math.sqrt(bdx*bdx + bdy*bdy + bdz*bdz) + 0.001;
+      const bs = 0.012 / (bd*bd*0.5 + 0.5);
+      tfx += bdx * bs; tfy += bdy * bs; tfz += bdz * bs;
+    }
+
+    // Ambient drift
+    if (hands.every(h => !h.present) || isAmbient) {
+      const na = Math.sin(i * 0.01 + time * 0.3) * 0.3;
+      tfx += Math.cos(na + i) * 0.0006;
+      tfy += Math.sin(na * 1.3 + i) * 0.0006;
+      tfz += Math.cos(na * 0.7 + i) * 0.0004;
+    }
+
+    if (!hasRespawn) {
+      vx += tfx * dt; vy += tfy * dt; vz += tfz * dt;
+    }
+
+    vx *= DAMPING; vy *= DAMPING; vz *= DAMPING;
+    const spd = Math.sqrt(vx*vx + vy*vy + vz*vz);
+    if (spd > MAX_SPEED) { const s = MAX_SPEED / spd; vx *= s; vy *= s; vz *= s; }
+
+    px += vx; py += vy; pz += vz;
+
+    // Soft sphere boundary
+    const br = Math.sqrt(px*px + py*py + pz*pz);
+    if (br > 17) {
+      const s = 17 / br;
+      px *= s; py *= s; pz *= s;
+      const dot = vx*px + vy*py + vz*pz;
+      const reflect = 2 * dot / (br*br) * 0.3;
+      vx -= reflect * px; vy -= reflect * py; vz -= reflect * pz;
+    }
+
+    cpuData[o7] = px; cpuData[o7+1] = py; cpuData[o7+2] = pz;
+    cpuData[o7+3] = vx; cpuData[o7+4] = vy; cpuData[o7+5] = vz;
+    cpuData[o7+6] = (cpuData[o7+6] + dt * 0.08) % 1.0;
+  }
+}
+
+function updateParticleColors(system, hands, isAmbient) {
+  const { colors, cpuData, count } = system;
+  const hasHand = hands.some(h => h.present);
+
+  for (let i = 0; i < count; i++) {
+    const o7 = i * 7;
+    const px = cpuData[o7], py = cpuData[o7+1], pz = cpuData[o7+2];
+
+    if (isAmbient) {
+      // Ambient colors stay in cyan range; brighten slightly near hands
+      let brightness = 1.0;
+      if (hasHand) {
+        let minDist = 999;
+        for (const h of hands) {
+          if (!h.present) continue;
+          const d = dist3d(px, py, pz, h.center.x, h.center.y, h.center.z);
+          if (d < minDist) minDist = d;
+        }
+        brightness = 1.0 + Math.max(0, 1.0 - minDist / 6.0) * 1.5;
+      }
+      colors[i*3] = clamp(colors[i*3] * brightness, 0, 1);
+      colors[i*3+1] = clamp(colors[i*3+1] * brightness, 0, 1);
+      colors[i*3+2] = clamp(colors[i*3+2] * brightness, 0, 1);
+    } else {
+      // Interactive: shift toward white near hands
+      let minDist = 999;
+      for (const h of hands) {
+        if (!h.present) continue;
+        const d = dist3d(px, py, pz, h.center.x, h.center.y, h.center.z);
+        if (d < minDist) minDist = d;
+      }
+      const glow = hasHand ? Math.max(0, 1.0 - minDist / 5.0) : 0;
+      const baseR = 0.0, baseG = 0.55, baseB = 0.75;
+      colors[i*3] = lerp(baseR, 1.0, glow);
+      colors[i*3+1] = lerp(baseG, 1.0, glow);
+      colors[i*3+2] = lerp(baseB, 1.0, glow);
+    }
+  }
+  system.geometry.attributes.customColor.needsUpdate = true;
+}
+
+// ==================== HAND STATE ====================
+class SmoothedHand {
+  constructor() {
+    this.center = { x:0, y:0, z:5 };
+    this.fingertip = { x:0, y:0, z:5 };
+    this.gesture = 'None';
+    this.prevGesture = 'None';
+    this.confidence = 0;
+    this.present = false;
+    this.velocity = { x:0, y:0, z:0 };
+    this.prevCenter = { x:0, y:0, z:5 };
+  }
+
+  update(rawHand, lerpFactor = 0.35) {
+    if (!rawHand || !rawHand.landmarks || rawHand.landmarks.length === 0) {
+      this.present = false;
+      return;
+    }
+
+    const lm = rawHand.landmarks;
+    // Palm center: average of wrist(0), middle finger MCP(9), pinky MCP(17)
+    const rawCenter = {
+      x: ((lm[0].x - 0.5) * 14),
+      y: ((0.5 - lm[0].y) * 11),
+      z: ((lm[0].z + 0.05) * 15),
+    };
+    // Index fingertip (landmark 8)
+    const rawTip = {
+      x: ((lm[8].x - 0.5) * 14),
+      y: ((0.5 - lm[8].y) * 11),
+      z: ((lm[8].z + 0.05) * 15),
+    };
+
+    // Smoother center: average of wrist, index mcp, middle mcp, ring mcp, pinky mcp
+    const palmX = (lm[0].x + lm[5].x + lm[9].x + lm[13].x + lm[17].x) / 5;
+    const palmY = (lm[0].y + lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 5;
+    const palmZ = (lm[0].z + lm[5].z + lm[9].z + lm[13].z + lm[17].z) / 5;
+    const smoothCenter = {
+      x: ((palmX - 0.5) * 14),
+      y: ((0.5 - palmY) * 11),
+      z: ((palmZ + 0.05) * 15),
+    };
+
+    this.prevCenter = { ...this.center };
+    this.center.x = lerp(this.center.x, smoothCenter.x, lerpFactor);
+    this.center.y = lerp(this.center.y, smoothCenter.y, lerpFactor);
+    this.center.z = lerp(this.center.z, smoothCenter.z, lerpFactor);
+
+    this.fingertip.x = lerp(this.fingertip.x, rawTip.x, lerpFactor);
+    this.fingertip.y = lerp(this.fingertip.y, rawTip.y, lerpFactor);
+    this.fingertip.z = lerp(this.fingertip.z, rawTip.z, lerpFactor);
+
+    // Velocity
+    this.velocity.x = this.center.x - this.prevCenter.x;
+    this.velocity.y = this.center.y - this.prevCenter.y;
+    this.velocity.z = this.center.z - this.prevCenter.z;
+
+    // Gesture
+    this.prevGesture = this.gesture;
+    if (rawHand.gestures && rawHand.gestures.length > 0 && rawHand.gestures[0].length > 0) {
+      const g = rawHand.gestures[0][0];
+      if (g.categoryName !== this.gesture) {
+        this.prevGesture = this.gesture;
+        this.gesture = g.categoryName;
+      }
+      this.confidence = g.score;
+    }
+
+    // Store raw landmarks for hand wireframe
+    this._rawLandmarks = lm;
+
+    this.present = true;
+  }
+
+  markAbsent() {
+    this._rawLandmarks = null;
+    this.present = false;
+    this.gesture = 'None';
+    this.confidence = 0;
+  }
+}
+
+// ==================== HAND DETECTION ====================
+let gestureRecognizer = null;
+let handLandmarker = null;
+let lastDetectionTime = 0;
+const DETECTION_INTERVAL = 1000 / CFG.detectFps;
+const handStates = [new SmoothedHand(), new SmoothedHand()];
+
+async function setupCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      width: { ideal: CFG.camW },
+      height: { ideal: CFG.camH },
+      facingMode: 'user',
+    },
+    audio: false,
+  });
+  video.srcObject = stream;
+  await video.play();
+  await new Promise(r => { video.onloadeddata = r; });
+  console.log('📷 Camera ready:', video.videoWidth, 'x', video.videoHeight);
+}
+
+async function setupMediaPipe() {
+  const { GestureRecognizer, FilesetResolver } = await import(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/vision_bundle.mjs'
+  );
+
+  const vision = await FilesetResolver.forVisionTasks(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm'
+  );
+
+  gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task',
+      delegate: 'GPU',
+    },
+    runningMode: 'VIDEO',
+    numHands: 2,
+    minHandDetectionConfidence: 0.5,
+    minHandPresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+
+  console.log('🤖 MediaPipe GestureRecognizer ready');
+}
+
+function detectHands(timestamp) {
+  if (!gestureRecognizer || video.readyState < 2) return;
+  if (timestamp - lastDetectionTime < DETECTION_INTERVAL) return;
+  lastDetectionTime = timestamp;
+
+  try {
+    const results = gestureRecognizer.recognizeForVideo(video, timestamp);
+
+    if (results.landmarks && results.landmarks.length > 0) {
+      for (let i = 0; i < Math.min(results.landmarks.length, 2); i++) {
+        handStates[i].update({
+          landmarks: results.landmarks[i],
+          gestures: results.gestures ? [results.gestures[i]] : null,
+        });
+      }
+      // Mark remaining as absent
+      for (let i = results.landmarks.length; i < 2; i++) {
+        handStates[i].markAbsent();
+      }
+    } else {
+      handStates[0].markAbsent();
+      handStates[1].markAbsent();
+    }
+  } catch (e) {
+    // Silently ignore detection errors
+  }
+}
+
+// ==================== UI FUNCTIONS ====================
+function updateHUD() {
+  const hand = handStates[0];
+  const hasHand = hand.present;
+
+  if (hasHand) {
+    const GESTURE_NAMES = {
+      'None': '手部存在', 'Open_Palm': '张开手掌', 'Closed_Fist': '握拳',
+      'Pointing_Up': '食指向上', 'Victory': 'V字', 'ILoveYou': '摇滚手势',
+      'Thumb_Up': '拇指向上', 'Thumb_Down': '拇指向下',
+    };
+    const GESTURE_EMOJIS = {
+      'None': '🖐', 'Open_Palm': '✋', 'Closed_Fist': '✊',
+      'Pointing_Up': '☝️', 'Victory': '✌️', 'ILoveYou': '🤟',
+      'Thumb_Up': '👍', 'Thumb_Down': '👎',
+    };
+
+    gestureEmoji.textContent = GESTURE_EMOJIS[hand.gesture] || '🖐';
+    gestureLabel.textContent = GESTURE_NAMES[hand.gesture] || hand.gesture;
+    confidenceFill.style.width = (hand.confidence * 100) + '%';
+
+    gestureHud.style.opacity = '1';
+    gestureHud.style.visibility = 'visible';
+
+    // Auto-fade after 3s stable
+    if (hand.gesture === hand.prevGesture) {
+      // Stable - will fade later
+    }
+  } else {
+    gestureHud.style.opacity = '0.25';
+    gestureHud.style.visibility = 'visible';
+  }
+}
+
+function updateFPS(fps) {
+  fpsDisplay.textContent = Math.round(fps);
+  if (fps < 45) {
+    fpsDisplay.classList.add('warning');
+  } else {
+    fpsDisplay.classList.remove('warning');
+    fpsDisplay.style.opacity = fps >= 58 ? '0.12' : '0.3';
+  }
+}
+
+let hintsHidden = false;
+let gesturesLearned = new Set();
+function checkHintsAutoHide() {
+  if (hintsHidden) return;
+  // Track unique gestures
+  for (const h of handStates) {
+    if (h.present && h.gesture !== 'None') {
+      gesturesLearned.add(h.gesture);
+    }
+  }
+  if (gesturesLearned.size >= 3) {
+    hideHints();
+  }
+}
+
+function hideHints() {
+  hintsHidden = true;
+  hintPanel.classList.add('hidden');
+}
+
+function showHints() {
+  hintsHidden = false;
+  hintPanel.classList.remove('hidden');
+  setTimeout(() => { if (!hintsHidden) hideHints(); }, 15000);
+}
+
+// ==================== KEYBOARD ====================
+window.addEventListener('keydown', (e) => {
+  switch (e.key.toLowerCase()) {
+    case 'f':
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        document.body.requestFullscreen().catch(() => {});
+      }
+      break;
+    case 'h':
+      hintsHidden ? showHints() : hideHints();
+      break;
+    case 'm':
+      toggleAudio();
+      break;
+  }
+});
+
+// ==================== TOUCH CONTROLS ====================
+if (DEVICE.isTouch) {
+  btnFullscreen.classList.add('visible');
+  btnHint.classList.add('visible');
+  shortcutHints.textContent = '触摸 ? 查看提示';
+
+  btnFullscreen.addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else if (document.webkitFullscreenElement) {
+      document.webkitExitFullscreen();
+    } else {
+      const el = document.body;
+      if (el.requestFullscreen) el.requestFullscreen().catch(()=>{});
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    }
+  });
+
+  btnHint.addEventListener('click', () => {
+    hintsHidden ? showHints() : hideHints();
+  });
+
+  // Double-tap for fullscreen
+  let lastTapTime = 0;
+  canvas.addEventListener('click', (e) => {
+    const now = Date.now();
+    if (now - lastTapTime < 300) {
+      // Double tap
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        document.body.requestFullscreen().catch(() => {});
+      }
+    }
+    lastTapTime = now;
+  });
+}
+
+// ==================== AUDIO ENGINE ====================
+let audioCtx = null;
+let audioMuted = false;
+const audioEngine = {
+  // Layer 1: Ambient drone
+  ambientOscs: [],
+  ambientGain: null,
+  ambientLFOs: [],
+  ambientFilter: null,
+
+  // Layer 2: Particle audio
+  particleGain: null,
+  particleReverb: null,
+
+  // Layer 3: Gesture chimes
+  gestureGain: null,
+  gestureReverb: null,
+
+  // Master
+  masterGain: null,
+  reverbNode: null,
+};
+
+// Pentatonic scale frequencies for gesture chimes
+const GESTURE_NOTES = {
+  'Open_Palm': 293.66,   // D4
+  'Closed_Fist': 392.00,  // G4
+  'Pointing_Up': 440.00,  // A4
+  'Victory': 329.63,      // E4
+  'ILoveYou': 523.25,     // C5
+  'Thumb_Up': 587.33,     // D5
+  'Thumb_Down': 196.00,   // G3
+};
+
+async function initAudio() {
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+
+    // Master
+    audioEngine.masterGain = audioCtx.createGain();
+    audioEngine.masterGain.gain.value = 0.7;
+    audioEngine.masterGain.connect(audioCtx.destination);
+
+    // === Reverb (simple delay-based) ===
+    const delay = audioCtx.createDelay(1.5);
+    delay.delayTime.value = 0.8;
+    const feedback = audioCtx.createGain();
+    feedback.gain.value = 0.25;
+    const reverbGain = audioCtx.createGain();
+    reverbGain.gain.value = 0.5;
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(reverbGain);
+    reverbGain.connect(audioEngine.masterGain);
+    // Also direct path
+    audioEngine.reverbNode = { input: delay, output: reverbGain, direct: audioEngine.masterGain };
+
+    // === Layer 1: Ambient Drone ===
+    audioEngine.ambientGain = audioCtx.createGain();
+    audioEngine.ambientGain.gain.value = 0.06; // very quiet
+    audioEngine.ambientGain.connect(audioEngine.masterGain);
+    // Also send to reverb
+    const ambToReverb = audioCtx.createGain();
+    ambToReverb.gain.value = 0.3;
+    audioEngine.ambientGain.connect(ambToReverb);
+    ambToReverb.connect(delay);
+
+    const frequencies = [55.0, 82.5, 110.0]; // A1, E2, A2
+    for (const freq of frequencies) {
+      const osc = audioCtx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq + (Math.random() - 0.5) * 6; // slight detune
+      osc.start();
+
+      // Individual LFO for subtle movement
+      const lfo = audioCtx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.value = 0.1 + Math.random() * 0.2;
+      const lfoGain = audioCtx.createGain();
+      lfoGain.gain.value = 2;
+      lfo.connect(lfoGain);
+      lfoGain.connect(osc.frequency);
+      lfo.start();
+
+      const oscGain = audioCtx.createGain();
+      oscGain.gain.value = 0.25 + Math.random() * 0.15;
+      osc.connect(oscGain);
+      oscGain.connect(audioEngine.ambientGain);
+
+      audioEngine.ambientOscs.push({ osc, lfo, gain: oscGain });
+    }
+
+    // Ambient filter
+    audioEngine.ambientFilter = audioCtx.createBiquadFilter();
+    audioEngine.ambientFilter.type = 'lowpass';
+    audioEngine.ambientFilter.frequency.value = 300;
+    audioEngine.ambientFilter.Q.value = 0.5;
+    audioEngine.ambientGain.disconnect(audioEngine.masterGain);
+    audioEngine.ambientGain.connect(audioEngine.ambientFilter);
+    audioEngine.ambientFilter.connect(audioEngine.masterGain);
+
+    // === Layer 2: Particle Audio Pool ===
+    audioEngine.particleGain = audioCtx.createGain();
+    audioEngine.particleGain.gain.value = 0.04;
+    audioEngine.particleGain.connect(audioEngine.masterGain);
+    const partToReverb = audioCtx.createGain();
+    partToReverb.gain.value = 0.4;
+    audioEngine.particleGain.connect(partToReverb);
+    partToReverb.connect(delay);
+
+    // Create a pool of 60 audio "particles"
+    audioEngine._particlePool = [];
+    for (let i = 0; i < 60; i++) {
+      audioEngine._particlePool.push({
+        osc: null,
+        gain: null,
+        panner: null,
+        lastTrigger: 0,
+        cooldown: 0.02 + Math.random() * 0.08,
+      });
+    }
+
+    // === Layer 3: Gesture Chimes ===
+    audioEngine.gestureGain = audioCtx.createGain();
+    audioEngine.gestureGain.gain.value = 0.15;
+    audioEngine.gestureGain.connect(audioEngine.masterGain);
+    const gestToReverb = audioCtx.createGain();
+    gestToReverb.gain.value = 0.6;
+    audioEngine.gestureGain.connect(gestToReverb);
+    gestToReverb.connect(delay);
+
+    console.log('🔊 Audio engine ready (4-layer procedural)');
+  } catch (e) {
+    console.log('🔇 Audio not available:', e.message);
+  }
+}
+
+function triggerGestureSound(gesture, confidence, panX) {
+  if (!audioCtx || audioMuted || !audioEngine.gestureGain) return;
+  if (confidence < 0.6) return;
+
+  const freq = GESTURE_NOTES[gesture];
+  if (!freq) return;
+
+  const now = audioCtx.currentTime;
+
+  // Main tone
+  const osc = audioCtx.createOscillator();
+  osc.type = 'triangle';
+  osc.frequency.value = freq;
+
+  // Overtone
+  const osc2 = audioCtx.createOscillator();
+  osc2.type = 'sine';
+  osc2.frequency.value = freq * 2;
+
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.25, now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+
+  const panner = audioCtx.createStereoPanner();
+  panner.pan.value = clamp(panX * 0.01, -1, 1);
+
+  osc.connect(gain);
+  osc2.connect(gain);
+  gain.connect(panner);
+  panner.connect(audioEngine.gestureGain);
+
+  osc.start(now);
+  osc2.start(now);
+  osc.stop(now + 0.8);
+  osc2.stop(now + 0.8);
+}
+
+function triggerParticleSound(density, avgX) {
+  if (!audioCtx || audioMuted || !audioEngine.particleGain || !audioEngine._particlePool) return;
+
+  const now = audioCtx.currentTime;
+  const pool = audioEngine._particlePool;
+
+  // Trigger a subset of the pool based on density
+  const numToTrigger = Math.floor(density * pool.length);
+  for (let i = 0; i < numToTrigger; i++) {
+    const p = pool[i];
+    if (now - p.lastTrigger < p.cooldown) continue;
+    p.lastTrigger = now;
+    p.cooldown = 0.01 + Math.random() * 0.06;
+
+    // Stop previous if still playing
+    if (p.osc) { try { p.osc.stop(); } catch(e) {} }
+
+    const osc = audioCtx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = 800 + Math.random() * 3200;
+
+    const gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.03 + Math.random() * 0.04, now + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05 + Math.random() * 0.15);
+
+    const panner = audioCtx.createStereoPanner();
+    panner.pan.value = clamp((Math.random() - 0.5) * 2 + avgX * 0.008, -1, 1);
+
+    osc.connect(gain);
+    gain.connect(panner);
+    panner.connect(audioEngine.particleGain);
+
+    osc.start(now);
+    osc.stop(now + 0.2);
+
+    p.osc = osc;
+    p.gain = gain;
+    p.panner = panner;
+  }
+}
+
+function triggerEnergyPulseSound() {
+  if (!audioCtx || audioMuted) return;
+  const now = audioCtx.currentTime;
+
+  // Low frequency thump
+  const bufferSize = audioCtx.sampleRate * 0.3;
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    const t = i / audioCtx.sampleRate;
+    data[i] = (Math.random() * 2 - 1) * Math.exp(-t * 12) * 0.3;
+  }
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = buffer;
+
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 200;
+
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0.5, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioEngine.masterGain);
+  noise.start(now);
+  noise.stop(now + 0.3);
+}
+
+function updateAudioEngine(dt, particleSystem, hands) {
+  if (!audioCtx || audioMuted) return;
+
+  // Update ambient based on hand presence
+  const hasHands = hands.some(h => h.present);
+  const bothHands = hands[0]?.present && hands[1]?.present;
+
+  if (audioEngine.ambientGain) {
+    const targetGain = hasHands ? (bothHands ? 0.1 : 0.08) : 0.06;
+    audioEngine.ambientGain.gain.value = lerp(audioEngine.ambientGain.gain.value, targetGain, dt * 0.5);
+  }
+
+  if (audioEngine.ambientFilter) {
+    const targetFreq = hasHands ? (bothHands ? 800 : 500) : 300;
+    audioEngine.ambientFilter.frequency.value = lerp(audioEngine.ambientFilter.frequency.value, targetFreq, dt * 0.5);
+  }
+
+  // Particle audio based on density
+  const { cpuData, count } = particleSystem;
+  // Quick density estimate: count particles within central area
+  let inCenter = 0;
+  const SAMPLE = Math.min(500, count);
+  for (let i = 0; i < SAMPLE; i++) {
+    const idx = Math.floor(Math.random() * count) * 7;
+    const d = Math.sqrt(cpuData[idx]*cpuData[idx] + cpuData[idx+1]*cpuData[idx+1] + cpuData[idx+2]*cpuData[idx+2]);
+    if (d < 6) inCenter++;
+  }
+  const density = inCenter / SAMPLE;
+  const avgX = 0; // approximate
+
+  if (density > 0.1) {
+    triggerParticleSound(density, avgX);
+  }
+}
+
+function setAudioMuted(muted) {
+  audioMuted = muted;
+  if (muted) {
+    audioToggle.classList.add('muted');
+    if (audioEngine.masterGain) audioEngine.masterGain.gain.value = 0;
+  } else {
+    audioToggle.classList.remove('muted');
+    if (audioEngine.masterGain) audioEngine.masterGain.gain.value = 0.7;
+  }
+}
+
+function toggleAudio() {
+  setAudioMuted(!audioMuted);
+}
+
+audioToggle.addEventListener('click', toggleAudio);
+
+// Resume audio on first user interaction (iOS requirement)
+document.addEventListener('touchstart', () => {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}, { once: true });
+document.addEventListener('click', () => {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}, { once: true });
+
+// ==================== CAMERA PROMPT ====================
+startCameraBtn.addEventListener('click', async () => {
+  try {
+    await setupCamera();
+    await setupMediaPipe();
+    cameraPrompt.classList.add('hidden');
+    initAudio();
+    showHints();
+  } catch (e) {
+    console.error('Camera/MediaPipe error:', e);
+    startCameraBtn.textContent = '重试';
+    alert('无法访问摄像头或加载模型，请检查权限和网络连接。');
+  }
+});
+
+// ==================== ANIMATION LOOP ====================
+let frameCount = 0;
+let fpsTime = performance.now();
+let currentFPS = 60;
+const handArray = [handStates[0], handStates[1]];
+
+function animate(timestamp) {
+  requestAnimationFrame(animate);
+
+  const dt = Math.min((timestamp - (animate.lastTimestamp || timestamp)) / 1000, 0.05);
+  animate.lastTimestamp = timestamp;
+
+  // Detect hands
+  detectHands(timestamp);
+
+  // Update global state
+  const hasAnyHand = handStates.some(h => h.present);
+  if (hasAnyHand) {
+    noHandTimer = 0;
+    if (ambientMode) {
+      ambientMode = false;
+      handEnterTransition = 1.5; // wake-up transition
+    }
+  } else {
+    noHandTimer += dt;
+    if (noHandTimer > 15 && !ambientMode) {
+      ambientMode = true;
+    }
+  }
+  if (handEnterTransition > 0) handEnterTransition -= dt;
+
+  // Gesture combo detection
+  for (const h of handStates) {
+    if (h.present && h.gesture !== h.prevGesture && h.gesture !== 'None' && h.confidence > 0.6) {
+      const now = performance.now() * 0.001;
+      if (now - lastGestureSwitchTime < 1.0) {
+        gestureComboCount++;
+      } else {
+        gestureComboCount = 0;
+      }
+      lastGestureSwitchTime = now;
+      gestureSwitchTime = now;
+    }
+  }
+
+  // Total energy
+  totalEnergy = 0;
+  for (const h of handStates) {
+    if (h.present) {
+      const v = Math.sqrt(h.velocity.x**2 + h.velocity.y**2 + h.velocity.z**2);
+      totalEnergy += v * 50;
+    }
+  }
+  totalEnergy = clamp(totalEnergy, 0, 1);
+
+  // Gesture change → spawn energy ring
+  for (const h of handStates) {
+    if (h.present && h.gesture !== h.prevGesture && h.gesture !== 'None' && h.confidence > 0.6) {
+      spawnEnergyRing(h.center.x, h.center.y, h.center.z);
+      triggerEnergyPulseSound();
+      triggerGestureSound(h.gesture, h.confidence, h.center.x);
+      h.prevGesture = h.gesture;
+    }
+  }
+
+  // Update particles
+  updateParticles(ambientSystem, handArray, dt, true);
+  updateParticles(interactiveSystem, handArray, dt, false);
+  updateParticleColors(ambientSystem, handArray, true);
+  updateParticleColors(interactiveSystem, handArray, false);
+  uploadParticleData(ambientSystem);
+  uploadParticleData(interactiveSystem);
+
+  // Phase 6-7: Trails, wireframe, rings, constellation, bridge
+  updateTrails(interactiveSystem, dt);
+  updateHandWireframe();
+  updateEnergyRings(dt);
+  updateConstellationLines(interactiveSystem);
+  updateEnergyBridge(dt);
+
+  // Audio: gesture sounds (triggered on change above) + ambient update
+  updateAudioEngine(dt, interactiveSystem, handArray);
+
+  // Update nebula time
+  nebulaMat.uniforms.uTime.value = timestamp * 0.001;
+
+  // Update chromatic aberration
+  if (chromaticPass) {
+    chromaticPass.uniforms.uTime.value = timestamp * 0.001;
+  }
+
+  // Update bloom based on energy
+  bloomPass.strength = lerp(CFG.bloom, CFG.bloom * 1.3, totalEnergy);
+
+  // Render
+  composer.render();
+
+  // FPS
+  frameCount++;
+  if (timestamp - fpsTime >= 1000) {
+    currentFPS = frameCount / ((timestamp - fpsTime) / 1000);
+    frameCount = 0;
+    fpsTime = timestamp;
+  }
+
+  // UI updates (throttled to ~10fps)
+  if (frameCount % 6 === 0) {
+    updateHUD();
+    updateFPS(currentFPS);
+    checkHintsAutoHide();
+  }
+}
+
+// ==================== RESIZE ====================
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / Math.max(window.innerHeight, 1);
+  camera.fov = window.innerWidth > window.innerHeight ? 60 : 50;
+  camera.updateProjectionMatrix();
+  composer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ==================== LOADING ====================
+const loadingPhrases = [
+  '正在连接宇宙意识...', '凝聚星尘中...', '准备穿越星门...',
+  '调谐量子频率...', '唤醒星际能量...',
+];
+let phraseIdx = 0;
+const phraseInterval = setInterval(() => {
+  phraseIdx = (phraseIdx + 1) % loadingPhrases.length;
+  loadingText.textContent = loadingPhrases[phraseIdx];
+}, 2000);
+
+// Simulate loading progress
+let loadProgress = 0;
+const loadInterval = setInterval(() => {
+  loadProgress += Math.random() * 8;
+  if (loadProgress >= 100) loadProgress = 100;
+
+  const circumference = 175.93;
+  const offset = circumference - (loadProgress / 100) * circumference;
+  progressCircle.style.strokeDashoffset = offset;
+
+  if (loadProgress >= 100) {
+    clearInterval(loadInterval);
+    clearInterval(phraseInterval);
+    setTimeout(() => {
+      loadingScreen.classList.add('hidden');
+    }, 400);
+  }
+}, 200);
+
+// ==================== START ====================
+console.log('🌌 NEBULA initialized');
+console.log(`   Profile: ${DEVICE.profile}`);
+console.log(`   Particles: ${CFG.ambient} ambient + ${CFG.interactive} interactive`);
+console.log('   👆 Click "开启摄像头" to begin the experience');
+
+// Start render loop immediately (shows nebula even before camera)
+animate(performance.now());
+</script>
+</body>
+</html>

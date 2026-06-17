@@ -1495,9 +1495,6 @@ const handStates = [new SmoothedHand(), new SmoothedHand()];
 
 // Global loading progress tracking
 let loadState = { wasm: 0, model: 0, camera: 0, ready: false };
-const MODEL_URLS = [
-  './gesture_recognizer.task',  // same-origin Vercel (fast globally)
-];
 
 async function setupCamera() {
   loadState.camera = 0.2;
@@ -1538,61 +1535,46 @@ function startMediaPipePreload() {
     );
     loadState.wasm = 1;
 
-    // Stage 2: Load gesture model (~8.4MB)
+    // Stage 2: Load gesture model (~8.4MB) — use modelAssetPath for reliability
     updateLoadingProgress(0.45, '正在加载手势模型...');
-    await loadModelWithProgress();
 
-    console.log('🤖 MediaPipe ready (preloaded)');
+    // Simulate progress while MediaPipe downloads the model internally
+    let modelProgressInterval = setInterval(() => {
+      const p = Math.min(0.45 + (Date.now() - modelStartTime) / 15000 * 0.35, 0.79);
+      updateLoadingProgress(p, '正在加载手势模型...');
+    }, 200);
+
+    const modelStartTime = Date.now();
+    try {
+      // Timeout after 60s to prevent hanging
+      gestureRecognizer = await Promise.race([
+        GestureRecognizer.createFromOptions(visionInstance, {
+          baseOptions: {
+            modelAssetPath: './gesture_recognizer.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numHands: 2,
+          minHandDetectionConfidence: 0.5,
+          minHandPresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('模型加载超时（60秒），请检查网络')), 60000)
+        ),
+      ]);
+    } catch (e) {
+      clearInterval(modelProgressInterval);
+      throw new Error('手势模型加载失败: ' + e.message);
+    }
+
+    clearInterval(modelProgressInterval);
+    loadState.model = 1;
+    updateLoadingProgress(0.85, '模型加载完成');
+    console.log(`🤖 MediaPipe ready in ${((Date.now() - modelStartTime)/1000).toFixed(1)}s`);
   })();
 
   return mediapipePreloadPromise;
-}
-
-async function loadModelWithProgress() {
-  // Try each model URL
-  for (const url of MODEL_URLS) {
-    try {
-      console.log(`   Trying model: ${url}`);
-      const response = await fetch(url);
-      if (!response.ok) continue;
-
-      const contentLength = response.headers.get('content-length');
-      const total = contentLength ? parseInt(contentLength) : 8400000;
-      const reader = response.body.getReader();
-      const chunks = [];
-      let loaded = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        loaded += value.length;
-        // Update progress: 45% → 80% mapped over model download
-        const modelProgress = 0.45 + (loaded / total) * 0.35;
-        updateLoadingProgress(Math.min(modelProgress, 0.80), `下载手势模型 ${Math.round(loaded/1024)}KB...`);
-      }
-
-      const blob = new Blob(chunks);
-      const file = new File([blob], 'gesture_recognizer.task');
-
-      gestureRecognizer = await GestureRecognizer.createFromOptions(visionInstance, {
-        baseOptions: { modelAssetBuffer: await file.arrayBuffer(), delegate: 'GPU' },
-        runningMode: 'VIDEO',
-        numHands: 2,
-        minHandDetectionConfidence: 0.5,
-        minHandPresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
-
-      loadState.model = 1;
-      updateLoadingProgress(0.85, '模型加载完成');
-      return;
-    } catch (e) {
-      console.warn(`   Failed: ${url}:`, e.message);
-    }
-  }
-
-  throw new Error('所有模型源均不可用。请将 gesture_recognizer.task 放入项目目录。');
 }
 
 async function setupMediaPipe() {

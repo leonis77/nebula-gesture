@@ -57,8 +57,9 @@
   }
 
   video#v {
-    display: none; position: absolute; top: 0; left: 0;
-    transform: scaleX(-1); /* mirror front camera */
+    position: fixed; top: 0; left: 0;
+    width: 1px; height: 1px; opacity: 0.01; pointer-events: none;
+    transform: scaleX(-1);
   }
 
   /* ===== GLASS PANEL BASE ===== */
@@ -1618,6 +1619,7 @@ const welcomeInterval = setInterval(() => {
   if (welcomeProgress >= 1) clearInterval(welcomeInterval);
 }, 100);
 
+let firstDetectionLogged = false;
 function detectHands(timestamp) {
   if (!gestureRecognizer || video.readyState < 2) return;
   if (timestamp - lastDetectionTime < DETECTION_INTERVAL) return;
@@ -1627,13 +1629,16 @@ function detectHands(timestamp) {
     const results = gestureRecognizer.recognizeForVideo(video, timestamp);
 
     if (results.landmarks && results.landmarks.length > 0) {
+      if (!firstDetectionLogged) {
+        console.log('✅ First hand detected!', results.landmarks.length, 'hand(s)');
+        firstDetectionLogged = true;
+      }
       for (let i = 0; i < Math.min(results.landmarks.length, 2); i++) {
         handStates[i].update({
           landmarks: results.landmarks[i],
           gestures: results.gestures ? [results.gestures[i]] : null,
         });
       }
-      // Mark remaining as absent
       for (let i = results.landmarks.length; i < 2; i++) {
         handStates[i].markAbsent();
       }
@@ -1642,7 +1647,7 @@ function detectHands(timestamp) {
       handStates[1].markAbsent();
     }
   } catch (e) {
-    // Silently ignore detection errors
+    console.error('Detection error:', e.message || e);
   }
 }
 

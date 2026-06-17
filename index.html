@@ -1496,8 +1496,7 @@ const handStates = [new SmoothedHand(), new SmoothedHand()];
 // Global loading progress tracking
 let loadState = { wasm: 0, model: 0, camera: 0, ready: false };
 const MODEL_URLS = [
-  './gesture_recognizer.task',                                          // same-origin (Vercel, fastest)
-  'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task', // Google CDN
+  './gesture_recognizer.task',  // same-origin Vercel (fast globally)
 ];
 
 async function setupCamera() {
@@ -1525,17 +1524,17 @@ function startMediaPipePreload() {
   if (mediapipePreloadPromise) return mediapipePreloadPromise;
 
   mediapipePreloadPromise = (async () => {
-    console.log('⚡ Preloading MediaPipe...');
+    console.log('⚡ Preloading MediaPipe (same-origin, no CDN)...');
 
-    // Stage 1: Load JS bundle + WASM runtime (~5MB)
+    // Stage 1: Load JS bundle from same origin
     updateLoadingProgress(0.15, '正在加载识别引擎...');
     const { GestureRecognizer, FilesetResolver } = await import(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/vision_bundle.mjs'
+      './mp/vision_bundle.mjs'
     );
 
     updateLoadingProgress(0.35, '正在初始化视觉模块...');
     visionInstance = await FilesetResolver.forVisionTasks(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm'
+      './mp/'
     );
     loadState.wasm = 1;
 

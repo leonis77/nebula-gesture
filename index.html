@@ -74,14 +74,13 @@
 
   /* ===== LOADING SCREEN ===== */
   #loading-screen {
-    position: fixed; inset: 0; z-index: 100;
+    position: fixed; inset: 0; z-index: 50;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     background: var(--deep-space);
-    transition: opacity 0.8s ease, visibility 0.8s ease;
+    transition: opacity 0.6s ease, visibility 0.6s ease;
+    pointer-events: none;
   }
-  #loading-screen.hidden {
-    opacity: 0; visibility: hidden; pointer-events: none;
-  }
+  #loading-screen.fade-out { opacity: 0; visibility: hidden; }
   #loading-screen .title {
     font-size: clamp(32px, 5vw, 56px); font-weight: 200; letter-spacing: 0.15em;
     color: var(--cyan-neon); text-shadow: 0 0 40px rgba(0,229,255,0.3);
@@ -183,7 +182,7 @@
 
   /* ===== CAMERA PROMPT ===== */
   #camera-prompt {
-    position: fixed; inset: 0; z-index: 90;
+    position: fixed; inset: 0; z-index: 100; /* above loading screen */
     display: flex; align-items: center; justify-content: center;
     background: rgba(2,0,24,0.85);
     transition: opacity 0.5s ease, visibility 0.5s ease;
@@ -201,6 +200,11 @@
     font-size: 13px; font-weight: 200; color: rgba(255,255,255,0.5);
     margin-bottom: 24px; line-height: 1.6;
   }
+  #camera-prompt .model-status {
+    font-size: 11px; color: rgba(0,229,255,0.5); margin-top: 16px;
+    min-height: 18px; letter-spacing: 0.05em;
+  }
+  #camera-prompt .model-status.ready { color: rgba(0,229,255,0.8); }
   #camera-prompt .privacy {
     font-size: 10px; color: rgba(255,255,255,0.25); margin-top: 12px;
   }
@@ -214,6 +218,9 @@
   #camera-prompt button:hover {
     background: rgba(0,229,255,0.2);
     box-shadow: 0 0 24px rgba(0,229,255,0.2);
+  }
+  #camera-prompt button:disabled {
+    opacity: 0.4; cursor: not-allowed;
   }
 
   /* ===== RESPONSIVE ===== */
@@ -296,6 +303,7 @@
     <h2>请允许摄像头权限</h2>
     <p>NEBULA 通过摄像头识别手势，<br>让你用双手与粒子互动</p>
     <button id="start-camera-btn">开启摄像头</button>
+    <div class="model-status" id="model-status">模型加载中...</div>
     <p class="privacy">🔒 视频数据完全在本地处理，不会上传</p>
   </div>
 </div>
@@ -1521,57 +1529,39 @@ function startMediaPipePreload() {
   if (mediapipePreloadPromise) return mediapipePreloadPromise;
 
   mediapipePreloadPromise = (async () => {
-    console.log('⚡ Preloading MediaPipe (same-origin, no CDN)...');
+    console.log('⚡ Preloading MediaPipe (same-origin)...');
+    updateModelStatus('正在加载识别引擎...');
 
-    // Stage 1: Load JS bundle from same origin
-    updateLoadingProgress(0.15, '正在加载识别引擎...');
-    const { GestureRecognizer, FilesetResolver } = await import(
-      './mp/vision_bundle.mjs'
-    );
-
-    updateLoadingProgress(0.35, '正在初始化视觉模块...');
-    visionInstance = await FilesetResolver.forVisionTasks(
-      './mp/'
-    );
+    // Stage 1: Load JS bundle + WASM from same origin
+    const { GestureRecognizer, FilesetResolver } = await import('./mp/vision_bundle.mjs');
+    updateModelStatus('正在初始化视觉模块...');
+    visionInstance = await FilesetResolver.forVisionTasks('./mp/');
     loadState.wasm = 1;
 
-    // Stage 2: Load gesture model (~8.4MB) — use modelAssetPath for reliability
-    updateLoadingProgress(0.45, '正在加载手势模型...');
-
-    // Simulate progress while MediaPipe downloads the model internally
-    let modelProgressInterval = setInterval(() => {
-      const p = Math.min(0.45 + (Date.now() - modelStartTime) / 15000 * 0.35, 0.79);
-      updateLoadingProgress(p, '正在加载手势模型...');
-    }, 200);
-
+    // Stage 2: Load gesture model via MediaPipe's native downloader
+    updateModelStatus('正在加载手势模型...');
     const modelStartTime = Date.now();
+
     try {
-      // Timeout after 60s to prevent hanging
       gestureRecognizer = await Promise.race([
         GestureRecognizer.createFromOptions(visionInstance, {
-          baseOptions: {
-            modelAssetPath: './gesture_recognizer.task',
-            delegate: 'GPU',
-          },
-          runningMode: 'VIDEO',
-          numHands: 2,
-          minHandDetectionConfidence: 0.5,
-          minHandPresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5,
+          baseOptions: { modelAssetPath: './gesture_recognizer.task', delegate: 'GPU' },
+          runningMode: 'VIDEO', numHands: 2,
+          minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
         }),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('模型加载超时（60秒），请检查网络')), 60000)
+          setTimeout(() => reject(new Error('模型加载超时')), 60000)
         ),
       ]);
     } catch (e) {
-      clearInterval(modelProgressInterval);
-      throw new Error('手势模型加载失败: ' + e.message);
+      updateModelStatus('模型加载失败，请刷新重试');
+      throw new Error('模型加载失败: ' + e.message);
     }
 
-    clearInterval(modelProgressInterval);
     loadState.model = 1;
-    updateLoadingProgress(0.85, '模型加载完成');
-    console.log(`🤖 MediaPipe ready in ${((Date.now() - modelStartTime)/1000).toFixed(1)}s`);
+    const elapsed = ((Date.now() - modelStartTime) / 1000).toFixed(1);
+    console.log(`🤖 MediaPipe ready in ${elapsed}s`);
+    updateModelStatus(`模型就绪 (${elapsed}s)`, true);
   })();
 
   return mediapipePreloadPromise;
@@ -1583,20 +1573,18 @@ async function setupMediaPipe() {
   else await startMediaPipePreload();
 }
 
-function updateLoadingProgress(progress, text) {
-  const p = Math.min(progress, 1);
+// Simplified progress ring update (for loading screen welcome animation only)
+function updateLoadingProgress(pct) {
   const circumference = 175.93;
-  const offset = circumference - p * circumference;
-  progressCircle.style.strokeDashoffset = offset;
-  if (text) loadingText.textContent = text;
+  progressCircle.style.strokeDashoffset = circumference - Math.min(pct, 1) * circumference;
 }
-
-// ==================== STARTUP: Begin preloading immediately ====================
-updateLoadingProgress(0.05, '正在初始化渲染引擎...');
-setTimeout(() => {
-  updateLoadingProgress(0.10, '正在准备手势识别...');
-  startMediaPipePreload(); // Start model download NOW, don't wait for camera
-}, 300);
+// Animate welcome ring to 100% in 2s then stop
+let welcomeProgress = 0;
+const welcomeInterval = setInterval(() => {
+  welcomeProgress += 0.05;
+  updateLoadingProgress(welcomeProgress);
+  if (welcomeProgress >= 1) clearInterval(welcomeInterval);
+}, 100);
 
 function detectHands(timestamp) {
   if (!gestureRecognizer || video.readyState < 2) return;
@@ -2065,27 +2053,37 @@ document.addEventListener('click', () => {
 
 // ==================== CAMERA PROMPT ====================
 startCameraBtn.addEventListener('click', async () => {
-  try {
-    updateLoadingProgress(0.88, '正在启动摄像头...');
-    await setupCamera();
-    updateLoadingProgress(0.95, '正在完成初始化...');
+  startCameraBtn.disabled = true;
+  startCameraBtn.textContent = '启动中...';
 
-    // Model should already be ready from preload; if not, load now
-    await setupMediaPipe();
+  try {
+    // Start camera immediately (fast, ~200ms)
+    await setupCamera();
+    loadState.camera = 1;
+    cameraPrompt.classList.add('hidden');
+    updateModelStatus('模型加载中...');
+
+    // Model may still be loading — that's OK, nebula + ambient particles show
+    // Hide loading screen once camera is ready
+    loadingScreen.classList.add('fade-out');
+
+    // Wait for model (may already be ready from preload)
+    if (!gestureRecognizer) {
+      updateModelStatus('等待手势模型...');
+      await setupMediaPipe();
+    }
 
     loadState.ready = true;
-    loadState.camera = 1;
+    updateModelStatus('已就绪 ✨', true);
+    setTimeout(() => { if (modelStatusEl) modelStatusEl.textContent = ''; }, 3000);
 
-    updateLoadingProgress(1.0, '准备就绪 ✨');
-    setTimeout(() => loadingScreen.classList.add('hidden'), 500);
-
-    cameraPrompt.classList.add('hidden');
     initAudio();
     showHints();
   } catch (e) {
-    console.error('Camera/MediaPipe error:', e);
+    console.error('Startup error:', e);
+    startCameraBtn.disabled = false;
     startCameraBtn.textContent = '重试';
-    loadingText.textContent = '加载失败：' + e.message.slice(0, 40);
+    updateModelStatus('启动失败: ' + e.message.slice(0, 30));
   }
 });
 
@@ -2222,26 +2220,31 @@ window.addEventListener('resize', () => {
   composer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ==================== LOADING (real progress, no fake) ====================
-// Progress is now driven by actual loading stages via updateLoadingProgress()
-// Initial progress set by the preload chain above (0.05 → 0.10 → ...)
+// ==================== LOADING (quick fade, don't block) ====================
+// Loading screen fades out after 2.5s — it's just a welcome animation
+// Camera prompt is always on top (z-index 100 > 50)
+setTimeout(() => {
+  loadingScreen.classList.add('fade-out');
+}, 2500);
 
-// Auto-cycle loading phrases until real progress takes over
-const loadingPhrases = [
-  '正在连接宇宙意识...', '凝聚星尘中...', '准备穿越星门...',
-  '调谐量子频率...', '唤醒星际能量...',
-];
+// Update model status text in camera prompt
+const modelStatusEl = document.getElementById('model-status');
+function updateModelStatus(text, ready = false) {
+  if (modelStatusEl) {
+    modelStatusEl.textContent = text;
+    if (ready) modelStatusEl.classList.add('ready');
+  }
+}
+
+// The initial loading phrase cycling (brief)
+const loadingPhrases = ['正在连接宇宙意识...', '凝聚星尘中...', '准备穿越星门...'];
 let phraseIdx = 0;
-const phraseInterval = setInterval(() => {
-  // Only cycle if not showing real progress text
-  if (loadingText.textContent && !loadingText.textContent.includes('KB') &&
-      !loadingText.textContent.includes('模型') && !loadingText.textContent.includes('识别引擎') &&
-      !loadingText.textContent.includes('视觉模块') && !loadingText.textContent.includes('摄像头') &&
-      !loadingText.textContent.includes('初始化') && !loadingText.textContent.includes('就绪')) {
-    phraseIdx = (phraseIdx + 1) % loadingPhrases.length;
+setInterval(() => {
+  phraseIdx = (phraseIdx + 1) % loadingPhrases.length;
+  if (!loadingScreen.classList.contains('fade-out')) {
     loadingText.textContent = loadingPhrases[phraseIdx];
   }
-}, 2500);
+}, 1500);
 
 // ==================== PAGE VISIBILITY ====================
 // Pause heavy work when tab is hidden
@@ -2268,12 +2271,13 @@ function updateAdaptiveQuality(fps) {
 
 // ==================== START ====================
 console.log('🌌 NEBULA initialized');
-console.log(`   Profile: ${DEVICE.profile}`);
-console.log(`   Particles: ${CFG.ambient} ambient + ${CFG.interactive} interactive`);
-console.log('   ⚡ Model preloading started — camera auth will be instant');
-console.log('   👆 Click "开启摄像头" to begin the experience');
+console.log(`   Profile: ${DEVICE.profile} | Particles: ${CFG.ambient}+${CFG.interactive}`);
+console.log('   ⚡ Model preloading in background...');
+console.log('   👆 Camera prompt visible — click anytime');
 
-// Start render loop immediately (shows nebula even before camera)
+// Start render loop immediately (nebula always renders)
+// Start preloading model in background
+setTimeout(() => startMediaPipePreload(), 100);
 animate(performance.now());
 </script>
 </body>

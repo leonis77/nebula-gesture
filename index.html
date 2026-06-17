@@ -1493,7 +1493,15 @@ let lastDetectionTime = 0;
 const DETECTION_INTERVAL = 1000 / CFG.detectFps;
 const handStates = [new SmoothedHand(), new SmoothedHand()];
 
+// Global loading progress tracking
+let loadState = { wasm: 0, model: 0, camera: 0, ready: false };
+const MODEL_URLS = [
+  './gesture_recognizer.task',                                          // same-origin (Vercel, fastest)
+  'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task', // Google CDN
+];
+
 async function setupCamera() {
+  loadState.camera = 0.2;
   const stream = await navigator.mediaDevices.getUserMedia({
     video: {
       width: { ideal: CFG.camW },
@@ -1505,32 +1513,109 @@ async function setupCamera() {
   video.srcObject = stream;
   await video.play();
   await new Promise(r => { video.onloadeddata = r; });
+  loadState.camera = 1;
   console.log('📷 Camera ready:', video.videoWidth, 'x', video.videoHeight);
 }
 
-async function setupMediaPipe() {
-  const { GestureRecognizer, FilesetResolver } = await import(
-    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/vision_bundle.mjs'
-  );
+// Start MediaPipe preloading IMMEDIATELY (before camera auth)
+let mediapipePreloadPromise = null;
+let visionInstance = null;
 
-  const vision = await FilesetResolver.forVisionTasks(
-    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm'
-  );
+function startMediaPipePreload() {
+  if (mediapipePreloadPromise) return mediapipePreloadPromise;
 
-  gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task',
-      delegate: 'GPU',
-    },
-    runningMode: 'VIDEO',
-    numHands: 2,
-    minHandDetectionConfidence: 0.5,
-    minHandPresenceConfidence: 0.5,
-    minTrackingConfidence: 0.5,
-  });
+  mediapipePreloadPromise = (async () => {
+    console.log('⚡ Preloading MediaPipe...');
 
-  console.log('🤖 MediaPipe GestureRecognizer ready');
+    // Stage 1: Load JS bundle + WASM runtime (~5MB)
+    updateLoadingProgress(0.15, '正在加载识别引擎...');
+    const { GestureRecognizer, FilesetResolver } = await import(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/vision_bundle.mjs'
+    );
+
+    updateLoadingProgress(0.35, '正在初始化视觉模块...');
+    visionInstance = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm'
+    );
+    loadState.wasm = 1;
+
+    // Stage 2: Load gesture model (~8.4MB)
+    updateLoadingProgress(0.45, '正在加载手势模型...');
+    await loadModelWithProgress();
+
+    console.log('🤖 MediaPipe ready (preloaded)');
+  })();
+
+  return mediapipePreloadPromise;
 }
+
+async function loadModelWithProgress() {
+  // Try each model URL
+  for (const url of MODEL_URLS) {
+    try {
+      console.log(`   Trying model: ${url}`);
+      const response = await fetch(url);
+      if (!response.ok) continue;
+
+      const contentLength = response.headers.get('content-length');
+      const total = contentLength ? parseInt(contentLength) : 8400000;
+      const reader = response.body.getReader();
+      const chunks = [];
+      let loaded = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        // Update progress: 45% → 80% mapped over model download
+        const modelProgress = 0.45 + (loaded / total) * 0.35;
+        updateLoadingProgress(Math.min(modelProgress, 0.80), `下载手势模型 ${Math.round(loaded/1024)}KB...`);
+      }
+
+      const blob = new Blob(chunks);
+      const file = new File([blob], 'gesture_recognizer.task');
+
+      gestureRecognizer = await GestureRecognizer.createFromOptions(visionInstance, {
+        baseOptions: { modelAssetBuffer: await file.arrayBuffer(), delegate: 'GPU' },
+        runningMode: 'VIDEO',
+        numHands: 2,
+        minHandDetectionConfidence: 0.5,
+        minHandPresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+
+      loadState.model = 1;
+      updateLoadingProgress(0.85, '模型加载完成');
+      return;
+    } catch (e) {
+      console.warn(`   Failed: ${url}:`, e.message);
+    }
+  }
+
+  throw new Error('所有模型源均不可用。请将 gesture_recognizer.task 放入项目目录。');
+}
+
+async function setupMediaPipe() {
+  if (gestureRecognizer) return; // Already preloaded
+  if (mediapipePreloadPromise) await mediapipePreloadPromise;
+  else await startMediaPipePreload();
+}
+
+function updateLoadingProgress(progress, text) {
+  const p = Math.min(progress, 1);
+  const circumference = 175.93;
+  const offset = circumference - p * circumference;
+  progressCircle.style.strokeDashoffset = offset;
+  if (text) loadingText.textContent = text;
+}
+
+// ==================== STARTUP: Begin preloading immediately ====================
+updateLoadingProgress(0.05, '正在初始化渲染引擎...');
+setTimeout(() => {
+  updateLoadingProgress(0.10, '正在准备手势识别...');
+  startMediaPipePreload(); // Start model download NOW, don't wait for camera
+}, 300);
 
 function detectHands(timestamp) {
   if (!gestureRecognizer || video.readyState < 2) return;
@@ -2000,15 +2085,26 @@ document.addEventListener('click', () => {
 // ==================== CAMERA PROMPT ====================
 startCameraBtn.addEventListener('click', async () => {
   try {
+    updateLoadingProgress(0.88, '正在启动摄像头...');
     await setupCamera();
+    updateLoadingProgress(0.95, '正在完成初始化...');
+
+    // Model should already be ready from preload; if not, load now
     await setupMediaPipe();
+
+    loadState.ready = true;
+    loadState.camera = 1;
+
+    updateLoadingProgress(1.0, '准备就绪 ✨');
+    setTimeout(() => loadingScreen.classList.add('hidden'), 500);
+
     cameraPrompt.classList.add('hidden');
     initAudio();
     showHints();
   } catch (e) {
     console.error('Camera/MediaPipe error:', e);
     startCameraBtn.textContent = '重试';
-    alert('无法访问摄像头或加载模型，请检查权限和网络连接。');
+    loadingText.textContent = '加载失败：' + e.message.slice(0, 40);
   }
 });
 
@@ -2024,7 +2120,14 @@ function animate(timestamp) {
   const dt = Math.min((timestamp - (animate.lastTimestamp || timestamp)) / 1000, 0.05);
   animate.lastTimestamp = timestamp;
 
-  // Detect hands
+  // Skip heavy work when tab hidden
+  if (!pageVisible) {
+    // Only render one frame then wait
+    composer.render();
+    return;
+  }
+
+  // Detect hands (runs at its own rate internally)
   detectHands(timestamp);
 
   // Update global state
@@ -2033,7 +2136,7 @@ function animate(timestamp) {
     noHandTimer = 0;
     if (ambientMode) {
       ambientMode = false;
-      handEnterTransition = 1.5; // wake-up transition
+      handEnterTransition = 1.5;
     }
   } else {
     noHandTimer += dt;
@@ -2047,17 +2150,14 @@ function animate(timestamp) {
   for (const h of handStates) {
     if (h.present && h.gesture !== h.prevGesture && h.gesture !== 'None' && h.confidence > 0.6) {
       const now = performance.now() * 0.001;
-      if (now - lastGestureSwitchTime < 1.0) {
-        gestureComboCount++;
-      } else {
-        gestureComboCount = 0;
-      }
+      if (now - lastGestureSwitchTime < 1.0) { gestureComboCount++; }
+      else { gestureComboCount = 0; }
       lastGestureSwitchTime = now;
       gestureSwitchTime = now;
     }
   }
 
-  // Total energy
+  // Total energy from hand velocity
   totalEnergy = 0;
   for (const h of handStates) {
     if (h.present) {
@@ -2067,7 +2167,7 @@ function animate(timestamp) {
   }
   totalEnergy = clamp(totalEnergy, 0, 1);
 
-  // Gesture change → spawn energy ring
+  // Gesture change → spawn energy ring + sounds
   for (const h of handStates) {
     if (h.present && h.gesture !== h.prevGesture && h.gesture !== 'None' && h.confidence > 0.6) {
       spawnEnergyRing(h.center.x, h.center.y, h.center.z);
@@ -2077,44 +2177,51 @@ function animate(timestamp) {
     }
   }
 
-  // Update particles
+  // === Particle updates (skip some with adaptive quality) ===
+  const updateAll = adaptiveQuality > 0.7 || frameCount % Math.ceil(2 / Math.max(adaptiveQuality, 0.3)) === 0;
+
   updateParticles(ambientSystem, handArray, dt, true);
   updateParticles(interactiveSystem, handArray, dt, false);
-  updateParticleColors(ambientSystem, handArray, true);
-  updateParticleColors(interactiveSystem, handArray, false);
+
+  if (updateAll) {
+    updateParticleColors(ambientSystem, handArray, true);
+    updateParticleColors(interactiveSystem, handArray, false);
+  }
+
   uploadParticleData(ambientSystem);
   uploadParticleData(interactiveSystem);
 
-  // Phase 6-7: Trails, wireframe, rings, constellation, bridge
-  updateTrails(interactiveSystem, dt);
+  // Phase 6-7: Visual effects (skip some when quality is low)
+  if (adaptiveQuality > 0.5) updateTrails(interactiveSystem, dt);
   updateHandWireframe();
   updateEnergyRings(dt);
-  updateConstellationLines(interactiveSystem);
-  updateEnergyBridge(dt);
 
-  // Audio: gesture sounds (triggered on change above) + ambient update
-  updateAudioEngine(dt, interactiveSystem, handArray);
-
-  // Update nebula time
-  nebulaMat.uniforms.uTime.value = timestamp * 0.001;
-
-  // Update chromatic aberration
-  if (chromaticPass) {
-    chromaticPass.uniforms.uTime.value = timestamp * 0.001;
+  if (updateAll && CFG.maxLines > 0) {
+    updateConstellationLines(interactiveSystem);
   }
 
-  // Update bloom based on energy
+  updateEnergyBridge(dt);
+
+  // Audio update
+  updateAudioEngine(dt, interactiveSystem, handArray);
+
+  // Update shader uniforms
+  nebulaMat.uniforms.uTime.value = timestamp * 0.001;
+  if (chromaticPass) chromaticPass.uniforms.uTime.value = timestamp * 0.001;
+
+  // Dynamic bloom based on energy
   bloomPass.strength = lerp(CFG.bloom, CFG.bloom * 1.3, totalEnergy);
 
   // Render
   composer.render();
 
-  // FPS
+  // FPS tracking
   frameCount++;
   if (timestamp - fpsTime >= 1000) {
     currentFPS = frameCount / ((timestamp - fpsTime) / 1000);
     frameCount = 0;
     fpsTime = timestamp;
+    updateAdaptiveQuality(currentFPS);
   }
 
   // UI updates (throttled to ~10fps)
@@ -2134,40 +2241,55 @@ window.addEventListener('resize', () => {
   composer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ==================== LOADING ====================
+// ==================== LOADING (real progress, no fake) ====================
+// Progress is now driven by actual loading stages via updateLoadingProgress()
+// Initial progress set by the preload chain above (0.05 → 0.10 → ...)
+
+// Auto-cycle loading phrases until real progress takes over
 const loadingPhrases = [
   '正在连接宇宙意识...', '凝聚星尘中...', '准备穿越星门...',
   '调谐量子频率...', '唤醒星际能量...',
 ];
 let phraseIdx = 0;
 const phraseInterval = setInterval(() => {
-  phraseIdx = (phraseIdx + 1) % loadingPhrases.length;
-  loadingText.textContent = loadingPhrases[phraseIdx];
-}, 2000);
-
-// Simulate loading progress
-let loadProgress = 0;
-const loadInterval = setInterval(() => {
-  loadProgress += Math.random() * 8;
-  if (loadProgress >= 100) loadProgress = 100;
-
-  const circumference = 175.93;
-  const offset = circumference - (loadProgress / 100) * circumference;
-  progressCircle.style.strokeDashoffset = offset;
-
-  if (loadProgress >= 100) {
-    clearInterval(loadInterval);
-    clearInterval(phraseInterval);
-    setTimeout(() => {
-      loadingScreen.classList.add('hidden');
-    }, 400);
+  // Only cycle if not showing real progress text
+  if (loadingText.textContent && !loadingText.textContent.includes('KB') &&
+      !loadingText.textContent.includes('模型') && !loadingText.textContent.includes('识别引擎') &&
+      !loadingText.textContent.includes('视觉模块') && !loadingText.textContent.includes('摄像头') &&
+      !loadingText.textContent.includes('初始化') && !loadingText.textContent.includes('就绪')) {
+    phraseIdx = (phraseIdx + 1) % loadingPhrases.length;
+    loadingText.textContent = loadingPhrases[phraseIdx];
   }
-}, 200);
+}, 2500);
+
+// ==================== PAGE VISIBILITY ====================
+// Pause heavy work when tab is hidden
+let pageVisible = true;
+document.addEventListener('visibilitychange', () => {
+  pageVisible = !document.hidden;
+  if (!pageVisible) {
+    // Pause particle updates to save resources
+    console.log('💤 Tab hidden — pausing heavy updates');
+  }
+});
+
+// ==================== ADAPTIVE QUALITY ====================
+let adaptiveQuality = 1.0; // 1.0 = full, 0.5 = half, etc.
+let fpsHistory = [];
+function updateAdaptiveQuality(fps) {
+  fpsHistory.push(fps);
+  if (fpsHistory.length > 60) fpsHistory.shift(); // 1 second window
+  const avgFps = fpsHistory.reduce((a, b) => a + b, 0) / fpsHistory.length;
+
+  if (avgFps < 30) adaptiveQuality = Math.max(0.3, adaptiveQuality - 0.05);
+  else if (avgFps > 50 && adaptiveQuality < 1.0) adaptiveQuality = Math.min(1.0, adaptiveQuality + 0.03);
+}
 
 // ==================== START ====================
 console.log('🌌 NEBULA initialized');
 console.log(`   Profile: ${DEVICE.profile}`);
 console.log(`   Particles: ${CFG.ambient} ambient + ${CFG.interactive} interactive`);
+console.log('   ⚡ Model preloading started — camera auth will be instant');
 console.log('   👆 Click "开启摄像头" to begin the experience');
 
 // Start render loop immediately (shows nebula even before camera)

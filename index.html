@@ -678,208 +678,281 @@ if (CFG.chromaticAberration) {
 // OutputPass removed — causes white screen in Three.js 0.182 + Vercel
 // Renderer toneMapping handles final output directly
 
-// ==================== PARTICLE SYSTEM ====================
-function createParticleSystem(count) {
-  const positions = new Float32Array(count * 3);
-  const colors = new Float32Array(count * 3);
-  const sizes = new Float32Array(count);
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute('customColor', new THREE.BufferAttribute(colors, 3));
-  geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
 
-  const material = new THREE.ShaderMaterial({
-    vertexShader: PARTICLE_VERTEX,
-    fragmentShader: PARTICLE_FRAGMENT,
-    uniforms: {},
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  });
 
-  const points = new THREE.Points(geometry, material);
-  points.renderOrder = 1;
-  scene.add(points);
+// ==================== GPGPU PARTICLE SYSTEM ====================
+// FBO ping-pong: particle physics computed entirely on GPU
+// WebGL2 Float RGBA textures: row0=(px,py,pz,vx) row1=(vy,vz,life,size)
 
-  // CPU-side data: [px, py, pz, vx, vy, vz, life] per particle
-  const cpuData = new Float32Array(count * 7);
+let gpgpuEnabled = false;
+let fboA, fboB, simMaterial, simScene, simCamera, simQuad;
+let particleRenderPoints, particleTexWidth, particleTexHeight, totalParticles;
 
-  return { points, geometry, positions, colors, sizes, count, cpuData, material };
+function checkGPGPUSupport() {
+  const gl = renderer.getContext();
+  return !!(gl.getExtension('EXT_color_buffer_float') && gl.getExtension('OES_texture_float'));
 }
 
-// Initialize ambient particles in sphere shell
-function initAmbientParticles(system) {
-  const { positions, colors, sizes, cpuData, count } = system;
-  for (let i = 0; i < count; i++) {
-    const r = 7 + Math.random() * 12;
+function setupGPGPU(particleCount) {
+  gpgpuEnabled = checkGPGPUSupport();
+  if (!gpgpuEnabled) {
+    console.warn('Float texture not supported - GPU particles unavailable');
+    return false;
+  }
+
+  totalParticles = particleCount;
+  particleTexWidth = Math.max(512, Math.pow(2, Math.ceil(Math.log2(Math.sqrt(particleCount * 2)))));
+  particleTexHeight = 2;
+  const W = particleTexWidth, H = particleTexHeight;
+  const totalPixels = W * H;
+
+  console.log('GPGPU: ' + particleCount + ' particles, texture ' + W + 'x' + H);
+
+  // Create Float FBOs
+  const fboOpts = { type: THREE.FloatType, format: THREE.RGBAFormat,
+    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+    depthBuffer: false, stencilBuffer: false };
+  fboA = new THREE.WebGLRenderTarget(W, H, fboOpts);
+  fboB = fboA.clone();
+
+  // Initialize particle data
+  const dataA = new Float32Array(totalPixels * 4);
+  const dataB = new Float32Array(totalPixels * 4);
+
+  for (let i = 0; i < particleCount; i++) {
+    const i4 = i * 4;
+    const r = 3 + Math.random() * 12;
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.acos(2 * Math.random() - 1);
-    const px = r * Math.sin(phi) * Math.cos(theta);
-    const py = r * Math.sin(phi) * Math.sin(theta);
-    const pz = r * Math.cos(phi);
-
-    const o7 = i * 7;
-    cpuData[o7] = px; cpuData[o7+1] = py; cpuData[o7+2] = pz;
-    const speed = 0.002 + Math.random() * 0.008;
-    cpuData[o7+3] = -Math.sin(theta) * speed;
-    cpuData[o7+4] = (Math.random() - 0.5) * speed * 0.5;
-    cpuData[o7+5] = Math.cos(theta) * speed;
-    cpuData[o7+6] = Math.random();
-
-    positions[i*3] = px; positions[i*3+1] = py; positions[i*3+2] = pz;
-
-    // cyan gradient
-    const t = r / 19;
-    colors[i*3] = 0.0 + t * 0.15;
-    colors[i*3+1] = 0.3 + t * 0.55;
-    colors[i*3+2] = 0.5 + t * 0.5;
-
-    sizes[i] = 2.0 + Math.random() * 3.0;
+    dataA[i4] = r * Math.sin(phi) * Math.cos(theta);
+    dataA[i4+1] = r * Math.sin(phi) * Math.sin(theta);
+    dataA[i4+2] = r * Math.cos(phi);
+    dataA[i4+3] = (Math.random() - 0.5) * 0.02;
+    dataB[i4] = (Math.random() - 0.5) * 0.02;
+    dataB[i4+1] = (Math.random() - 0.5) * 0.02;
+    dataB[i4+2] = Math.random();
+    dataB[i4+3] = 1.5 + Math.random() * 4.0;
   }
-}
 
-// Initialize interactive particles random
-function initInteractiveParticles(system) {
-  const { positions, colors, sizes, cpuData, count } = system;
-  for (let i = 0; i < count; i++) {
-    const px = (Math.random() - 0.5) * 8;
-    const py = (Math.random() - 0.5) * 8;
-    const pz = (Math.random() - 0.5) * 8;
-
-    const o7 = i * 7;
-    cpuData[o7] = px; cpuData[o7+1] = py; cpuData[o7+2] = pz;
-    cpuData[o7+3] = 0; cpuData[o7+4] = 0; cpuData[o7+5] = 0;
-    cpuData[o7+6] = Math.random();
-
-    positions[i*3] = px; positions[i*3+1] = py; positions[i*3+2] = pz;
-
-    const t = Math.random();
-    colors[i*3] = 0.0 + t * 0.3;
-    colors[i*3+1] = 0.55 + t * 0.3;
-    colors[i*3+2] = 0.75 + t * 0.25;
-
-    sizes[i] = 1.5 + Math.random() * 4.0;
+  // Upload to FBOs via DataTexture helper
+  function uploadToFBO(fbo, data) {
+    const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat, THREE.FloatType);
+    tex.needsUpdate = true;
+    const tmpS = new THREE.Scene();
+    const tmpC = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const tmpM = new THREE.MeshBasicMaterial({ map: tex });
+    const tmpQ = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), tmpM);
+    tmpS.add(tmpQ);
+    renderer.setRenderTarget(fbo);
+    renderer.render(tmpS, tmpC);
+    renderer.setRenderTarget(null);
+    tmpM.dispose(); tex.dispose(); tmpQ.geometry.dispose();
   }
-}
+  uploadToFBO(fboA, dataA);
+  uploadToFBO(fboB, dataB);
 
-// Upload CPU data to GPU
-function uploadParticleData(system) {
-  const { positions, colors, sizes, cpuData, count } = system;
-  for (let i = 0; i < count; i++) {
-    const o7 = i * 7;
-    positions[i*3] = cpuData[o7];
-    positions[i*3+1] = cpuData[o7+1];
-    positions[i*3+2] = cpuData[o7+2];
-
-    const pulse = 1.0 + Math.sin(cpuData[o7+6] * Math.PI * 2) * 0.3;
-    sizes[i] = system.baseSizes ? system.baseSizes[i] * pulse : (2.0 + Math.random() * 0.1) * pulse;
-  }
-  system.geometry.attributes.position.needsUpdate = true;
-  system.geometry.attributes.customColor.needsUpdate = true;
-  system.geometry.attributes.size.needsUpdate = true;
-}
-
-// ==================== CREATE PARTICLE SYSTEMS ====================
-const ambientSystem = createParticleSystem(CFG.ambient);
-initAmbientParticles(ambientSystem);
-// Store base sizes for pulsing
-ambientSystem.baseSizes = new Float32Array(CFG.ambient);
-for (let i = 0; i < CFG.ambient; i++) {
-  ambientSystem.baseSizes[i] = 2.0 + Math.random() * 3.0;
-}
-
-const interactiveSystem = createParticleSystem(CFG.interactive);
-initInteractiveParticles(interactiveSystem);
-interactiveSystem.baseSizes = new Float32Array(CFG.interactive);
-for (let i = 0; i < CFG.interactive; i++) {
-  interactiveSystem.baseSizes[i] = 1.5 + Math.random() * 4.0;
-}
-
-// ==================== TRAIL SYSTEM ====================
-const trailSystem = {
-  history: [], // ring buffer: [particleIdx][frameIdx] = {x,y,z}
-  trailPoints: null,
-  trailPositions: null,
-  trailColors: null,
-  trailSizes: null,
-  head: 0,
-  enabled: CFG.trailLen > 0,
-};
-
-if (trailSystem.enabled) {
-  const totalTrailPoints = CFG.interactive * CFG.trailLen;
-  trailSystem.history = new Array(CFG.interactive);
-  for (let i = 0; i < CFG.interactive; i++) {
-    trailSystem.history[i] = new Array(CFG.trailLen);
-    for (let j = 0; j < CFG.trailLen; j++) {
-      trailSystem.history[i][j] = { x: 0, y: 0, z: 0 };
+  // === SIMULATION SHADER ===
+  const SIM_FRAG = `varying vec2 vUv;
+uniform sampler2D uStateA, uStateB;
+uniform vec3 uHandPos[2];
+uniform float uHandPresent[2], uHandStrength[2];
+uniform float uMode, uDeltaTime, uTime, uTexWidth;
+void main() {
+  vec2 uvA = vec2(vUv.x, 0.25), uvB = vec2(vUv.x, 0.75);
+  vec4 sA = texture2D(uStateA, uvA), sB = texture2D(uStateB, uvB);
+  vec3 pos = sA.rgb, vel = vec3(sA.a, sB.rg);
+  float life = sB.b, size = sB.a;
+  vec3 force = vec3(0.0);
+  for (int h = 0; h < 2; h++) {
+    if (uHandPresent[h] < 0.5) continue;
+    vec3 dir = uHandPos[h] - pos;
+    float dist = length(dir) + 0.01;
+    vec3 ndir = dir / dist;
+    float str = uHandStrength[h];
+    if (uMode < 0.5) {
+      float fm = mix(0.3, 2.5, step(0.0, str)) * abs(str) / (dist*dist+0.3);
+      force += ndir * fm * sign(str+0.001);
+    } else if (uMode < 1.5) {
+      force += ndir * str * 1.8 * exp(-dist * 0.45);
+    } else {
+      vec3 tang = normalize(cross(dir,vec3(0,1,0))+cross(dir,vec3(0,0,1))*0.3);
+      force += tang * str * 1.8 / (dist*dist+0.6);
     }
   }
+  force.x += sin(pos.y*0.4+uTime*0.3)*0.003;
+  force.y += cos(pos.x*0.4+uTime*0.25)*0.003;
+  force.z += sin(pos.z*0.4+uTime*0.35)*0.002;
+  vel += force * uDeltaTime; vel *= 0.975;
+  float spd = length(vel); if(spd>1.5) vel*=1.5/spd;
+  pos += vel * uDeltaTime;
+  float r = length(pos);
+  if(r>17.0){ pos*=17.0/r; vel-=dot(vel,pos)/(r*r)*pos*0.6; }
+  life = fract(life+uDeltaTime*0.06);
+  if(vUv.y<0.5) gl_FragColor=vec4(pos,vel.x);
+  else gl_FragColor=vec4(vel.y,vel.z,life,size);
+}`;
 
-  const tGeo = new THREE.BufferGeometry();
-  trailSystem.trailPositions = new Float32Array(totalTrailPoints * 3);
-  trailSystem.trailColors = new Float32Array(totalTrailPoints * 3);
-  trailSystem.trailSizes = new Float32Array(totalTrailPoints);
-  tGeo.setAttribute('position', new THREE.BufferAttribute(trailSystem.trailPositions, 3));
-  tGeo.setAttribute('customColor', new THREE.BufferAttribute(trailSystem.trailColors, 3));
-  tGeo.setAttribute('size', new THREE.BufferAttribute(trailSystem.trailSizes, 1));
-
-  const tMat = new THREE.ShaderMaterial({
-    vertexShader: PARTICLE_VERTEX,
-    fragmentShader: PARTICLE_FRAGMENT,
-    uniforms: {},
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
+  simMaterial = new THREE.ShaderMaterial({
+    vertexShader: `varying vec2 vUv; void main() { vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }`,
+    fragmentShader: SIM_FRAG,
+    uniforms: {
+      uStateA: { value: fboA.texture }, uStateB: { value: fboB.texture },
+      uHandPos: { value: [new THREE.Vector3(), new THREE.Vector3()] },
+      uHandPresent: { value: [0, 0] }, uHandStrength: { value: [0.3, 0.3] },
+      uMode: { value: 0 }, uDeltaTime: { value: 0.016 }, uTime: { value: 0 },
+      uTexWidth: { value: W },
+    },
+    depthTest: false, depthWrite: false,
   });
 
-  trailSystem.trailPoints = new THREE.Points(tGeo, tMat);
-  trailSystem.trailPoints.renderOrder = 0;
-  trailSystem.trailPoints.frustumCulled = false;
-  scene.add(trailSystem.trailPoints);
+  simScene = new THREE.Scene();
+  simCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  simQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), simMaterial);
+  simScene.add(simQuad);
+
+  // === RENDER POINTS ===
+  const idxArr = new Float32Array(particleCount * 2);
+  for (let i = 0; i < particleCount; i++) { idxArr[i*2] = i; idxArr[i*2+1] = 0; }
+
+  const renderGeo = new THREE.BufferGeometry();
+  renderGeo.setAttribute('aIndex', new THREE.BufferAttribute(idxArr, 2));
+  renderGeo.setDrawRange(0, particleCount);
+
+  const RENDER_VERT = `attribute vec2 aIndex;
+uniform sampler2D uStateA, uStateB;
+uniform float uTexWidth;
+uniform vec3 uHandPos[2];
+varying vec3 vColor; varying float vAlpha;
+void main() {
+  float uvX = (aIndex.x + 0.5) / uTexWidth;
+  vec4 sA = texture2D(uStateA, vec2(uvX, 0.25));
+  vec4 sB = texture2D(uStateB, vec2(uvX, 0.75));
+  vec3 pos = sA.rgb; float sz = sB.a * 3.5;
+  vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+  float pulse = 1.0 + sin(sB.b * 6.283) * 0.25;
+  gl_PointSize = clamp(sz * pulse * (280.0 / -mv.z), 0.5, 12.0);
+  gl_Position = projectionMatrix * mv;
+  float minD = 99.0;
+  for (int h=0; h<2; h++) { float d=length(uHandPos[h]-pos); if(d<minD) minD=d; }
+  float heat = 1.0 - clamp(minD/6.0, 0.0, 1.0);
+  vColor = mix(vec3(0.1,0.45,0.9), vec3(1.0,0.85,0.5), heat*heat);
+  vAlpha = smoothstep(2.0, 12.0, -mv.z);
+}`;
+
+  const RENDER_FRAG = `varying vec3 vColor; varying float vAlpha;
+void main() {
+  vec2 uv = gl_PointCoord - 0.5; float d = length(uv) * 2.0;
+  float core = exp(-d*d*3.0), glow = exp(-d*d*8.0)*0.5;
+  float a = core + glow; if(a < 0.02) discard;
+  gl_FragColor = vec4(vColor*(1.0+glow*0.6), a*vAlpha);
+}`;
+
+  const renderMat = new THREE.ShaderMaterial({
+    vertexShader: RENDER_VERT,
+    fragmentShader: RENDER_FRAG,
+    uniforms: {
+      uStateA: { value: fboB.texture }, uStateB: { value: fboB.texture },
+      uTexWidth: { value: W },
+      uHandPos: { value: [new THREE.Vector3(), new THREE.Vector3()] },
+    },
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+
+  particleRenderPoints = new THREE.Points(renderGeo, renderMat);
+  particleRenderPoints.renderOrder = 1;
+  particleRenderPoints.frustumCulled = false;
+  scene.add(particleRenderPoints);
+
+  console.log('GPGPU ready: ' + particleCount + ' particles, ' + W + 'x' + H + ' texture');
+  return true;
 }
 
-function updateTrails(particleSystem, dt) {
-  if (!trailSystem.enabled) return;
-  const { cpuData, count } = particleSystem;
-  const tl = CFG.trailLen;
+let simReadFbo = null, simWriteFbo = null;
 
-  // Shift history and record new positions
-  for (let i = 0; i < count; i++) {
-    const hist = trailSystem.history[i];
-    // Shift older entries forward
-    for (let j = tl - 1; j > 0; j--) {
-      hist[j].x = hist[j-1].x;
-      hist[j].y = hist[j-1].y;
-      hist[j].z = hist[j-1].z;
-    }
-    // Record current position
-    const o7 = i * 7;
-    hist[0].x = cpuData[o7];
-    hist[0].y = cpuData[o7+1];
-    hist[0].z = cpuData[o7+2];
-  }
+function gpgpuSimulate(dt) {
+  if (!gpgpuEnabled) return;
+  if (!simReadFbo) { simReadFbo = fboA; simWriteFbo = fboB; }
+  else { const t = simReadFbo; simReadFbo = simWriteFbo; simWriteFbo = t; }
 
-  // Upload to GPU
-  for (let i = 0; i < count; i++) {
-    const hist = trailSystem.history[i];
-    for (let j = 0; j < tl; j++) {
-      const idx = (i * tl + j);
-      const alpha = Math.max(0, 1.0 - j / tl); // fade along trail
-      trailSystem.trailPositions[idx*3] = hist[j].x;
-      trailSystem.trailPositions[idx*3+1] = hist[j].y;
-      trailSystem.trailPositions[idx*3+2] = hist[j].z;
-      trailSystem.trailColors[idx*3] = 0.0;
-      trailSystem.trailColors[idx*3+1] = 0.55 * alpha;
-      trailSystem.trailColors[idx*3+2] = 0.8 * alpha;
-      trailSystem.trailSizes[idx] = (3.0 - j * (2.5 / tl)) * alpha;
+  const u = simMaterial.uniforms;
+  u.uStateA.value = simReadFbo.texture;
+  u.uStateB.value = simReadFbo.texture;
+  u.uDeltaTime.value = Math.min(dt, 0.05);
+  u.uTime.value = performance.now() * 0.001;
+  u.uMode.value = modeManager.getModeId();
+
+  for (let h = 0; h < 2; h++) {
+    const hand = handStates[h];
+    if (hand.present) {
+      u.uHandPos.value[h].set(hand.center.x, hand.center.y, hand.center.z);
+      u.uHandPresent.value[h] = 1;
+      u.uHandStrength.value[h] = modeManager.getStrength(hand);
+    } else {
+      u.uHandPresent.value[h] = 0;
     }
   }
-  trailSystem.trailPoints.geometry.attributes.position.needsUpdate = true;
-  trailSystem.trailPoints.geometry.attributes.customColor.needsUpdate = true;
-  trailSystem.trailPoints.geometry.attributes.size.needsUpdate = true;
+
+  renderer.setRenderTarget(simWriteFbo);
+  renderer.render(simScene, simCamera);
+  renderer.setRenderTarget(null);
+
+  const rm = particleRenderPoints.material.uniforms;
+  rm.uStateA.value = simWriteFbo.texture;
+  rm.uStateB.value = simWriteFbo.texture;
+  for (let h = 0; h < 2; h++) {
+    if (handStates[h].present) rm.uHandPos.value[h].copy(u.uHandPos.value[h]);
+  }
 }
+
+// ==================== MODE SYSTEM ====================
+class ModeManager {
+  constructor() {
+    this.current = 'blackhole';
+    this.modes = {
+      blackhole: { id: 0, name: 'Black Hole', emoji: 'BH', strength: 2.5 },
+      energy:    { id: 1, name: 'Energy Burst', emoji: 'EB', strength: 1.8 },
+      flow:      { id: 2, name: 'Flow', emoji: 'FL', strength: 1.5 },
+    };
+    this.comboCount = 0;
+    this.lastComboTime = 0;
+  }
+  getModeId() { return this.modes[this.current].id; }
+  getStrength(hand) {
+    const base = this.modes[this.current].strength;
+    if (this.current === 'blackhole') {
+      if (hand.gesture === 'Closed_Fist') return base * 1.8;
+      if (hand.gesture === 'Open_Palm') return -base;
+      return base * 0.3;
+    }
+    if (this.current === 'energy') {
+      const spd = Math.sqrt(hand.velocity.x**2 + hand.velocity.y**2 + hand.velocity.z**2);
+      return base * (0.3 + spd * 15);
+    }
+    return base * 0.8;
+  }
+  switchTo(name) {
+    if (this.current === name) return;
+    this.current = name;
+    this.comboCount = 0;
+    const m = this.modes[name];
+    if (typeof showToast !== 'undefined') showToast(m.emoji + ' ' + m.name, 2000);
+    console.log('Mode:', m.name);
+  }
+  registerGesture(gesture) {
+    if (this.current !== 'blackhole') return;
+    if (gesture === 'Closed_Fist') {
+      const now = performance.now() * 0.001;
+      this.comboCount = (now - this.lastComboTime < 1.5) ? this.comboCount + 1 : 1;
+      this.lastComboTime = now;
+      if (this.comboCount >= 3) {
+        if (typeof showToast !== 'undefined') showToast('SUPERNOVA!', 3000);
+        this.comboCount = 0;
+      }
+    }
+  }
+}
+const modeManager = new ModeManager();
 
 // ==================== HAND WIREFRAME ====================
 // MediaPipe hand topology: which landmarks to connect
@@ -993,274 +1066,6 @@ function updateHandWireframe() {
   handJointDots.visible = anyHand;
 }
 
-// ==================== ENERGY RINGS ====================
-const RING_PARTICLES = 200;
-const MAX_RINGS = CFG.rings;
-let activeRings = [];
-
-function spawnEnergyRing(x, y, z) {
-  if (activeRings.length >= MAX_RINGS) {
-    // Remove oldest ring
-    const old = activeRings.shift();
-    scene.remove(old.points);
-    old.points.geometry.dispose();
-    old.points.material.dispose();
-  }
-
-  const ringPositions = new Float32Array(RING_PARTICLES * 3);
-  const ringColors = new Float32Array(RING_PARTICLES * 3);
-  const ringSizes = new Float32Array(RING_PARTICLES);
-
-  const ringGeo = new THREE.BufferGeometry();
-  ringGeo.setAttribute('position', new THREE.BufferAttribute(ringPositions, 3));
-  ringGeo.setAttribute('customColor', new THREE.BufferAttribute(ringColors, 3));
-  ringGeo.setAttribute('size', new THREE.BufferAttribute(ringSizes, 1));
-
-  const ringMat = new THREE.ShaderMaterial({
-    vertexShader: PARTICLE_VERTEX,
-    fragmentShader: PARTICLE_FRAGMENT,
-    uniforms: {},
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  });
-
-  const ringPoints = new THREE.Points(ringGeo, ringMat);
-  ringPoints.renderOrder = 2;
-  ringPoints.frustumCulled = false;
-  scene.add(ringPoints);
-
-  const ring = {
-    points: ringPoints,
-    positions: ringPositions,
-    colors: ringColors,
-    sizes: ringSizes,
-    centerX: x, centerY: y, centerZ: z,
-    radius: 0.3,
-    life: 1.0,
-    maxLife: 1.5,
-  };
-
-  // Initialize ring particles in a circle
-  for (let i = 0; i < RING_PARTICLES; i++) {
-    const angle = (i / RING_PARTICLES) * Math.PI * 2;
-    ringPositions[i*3] = x + Math.cos(angle) * ring.radius;
-    ringPositions[i*3+1] = y + Math.sin(angle) * ring.radius;
-    ringPositions[i*3+2] = z;
-    ringColors[i*3] = 1.0; ringColors[i*3+1] = 1.0; ringColors[i*3+2] = 1.0;
-    ringSizes[i] = 2.5;
-  }
-  ringGeo.attributes.position.needsUpdate = true;
-  ringGeo.attributes.customColor.needsUpdate = true;
-  ringGeo.attributes.size.needsUpdate = true;
-
-  activeRings.push(ring);
-}
-
-function updateEnergyRings(dt) {
-  for (let r = activeRings.length - 1; r >= 0; r--) {
-    const ring = activeRings[r];
-    ring.life -= dt;
-    if (ring.life <= 0) {
-      scene.remove(ring.points);
-      ring.points.geometry.dispose();
-      ring.points.material.dispose();
-      activeRings.splice(r, 1);
-      continue;
-    }
-
-    ring.radius += dt * 5.0; // expand
-    const alpha = ring.life / ring.maxLife;
-
-    for (let i = 0; i < RING_PARTICLES; i++) {
-      const angle = (i / RING_PARTICLES) * Math.PI * 2 + ring.life * 2;
-      ring.positions[i*3] = ring.centerX + Math.cos(angle) * ring.radius;
-      ring.positions[i*3+1] = ring.centerY + Math.sin(angle) * ring.radius;
-      ring.positions[i*3+2] = ring.centerZ + Math.sin(angle * 3) * 0.3;
-      ring.colors[i*3] = alpha;
-      ring.colors[i*3+1] = 0.8 * alpha;
-      ring.colors[i*3+2] = alpha;
-      ring.sizes[i] = 2.5 * alpha;
-    }
-    ring.points.geometry.attributes.position.needsUpdate = true;
-    ring.points.geometry.attributes.customColor.needsUpdate = true;
-    ring.points.geometry.attributes.size.needsUpdate = true;
-  }
-}
-
-// ==================== CONSTELLATION LINES ====================
-let constellationLines = null;
-let constellationPositions = null;
-
-if (CFG.maxLines > 0) {
-  const clGeo = new THREE.BufferGeometry();
-  constellationPositions = new Float32Array(CFG.maxLines * 2 * 3);
-  clGeo.setAttribute('position', new THREE.BufferAttribute(constellationPositions, 3));
-  clGeo.setDrawRange(0, 0);
-  const clMat = new THREE.LineBasicMaterial({
-    color: 0x00E5FF,
-    transparent: true,
-    opacity: 0.12,
-    depthTest: false,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  });
-  constellationLines = new THREE.LineSegments(clGeo, clMat);
-  constellationLines.renderOrder = 0;
-  constellationLines.frustumCulled = false;
-  scene.add(constellationLines);
-}
-
-function updateConstellationLines(particleSystem) {
-  if (!constellationLines || CFG.maxLines === 0) return;
-  const { cpuData, count } = particleSystem;
-  const maxDist = 2.5;
-  const maxLines = CFG.maxLines;
-
-  // Simple spatial grid (cell size = maxDist)
-  const cellSize = maxDist;
-  const grid = new Map();
-
-  for (let i = 0; i < count; i++) {
-    const o7 = i * 7;
-    const cx = Math.floor(cpuData[o7] / cellSize);
-    const cy = Math.floor(cpuData[o7+1] / cellSize);
-    const cz = Math.floor(cpuData[o7+2] / cellSize);
-    const key = `${cx},${cy},${cz}`;
-    if (!grid.has(key)) grid.set(key, []);
-    grid.get(key).push(i);
-  }
-
-  // Find close pairs
-  const closePairs = [];
-  const checked = new Set();
-
-  for (const [key, indices] of grid) {
-    const [cx, cy, cz] = key.split(',').map(Number);
-
-    // Check this cell and 13 neighboring cells (half of 26, to avoid duplicates)
-    for (let dx = 0; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dz = -1; dz <= 1; dz++) {
-          if (dx === 0 && (dy < 0 || (dy === 0 && dz <= 0))) continue;
-          const nKey = `${cx+dx},${cy+dy},${cz+dz}`;
-          const nIndices = grid.get(nKey);
-          if (!nIndices) continue;
-
-          for (const i of indices) {
-            const o7i = i * 7;
-            for (const j of nIndices) {
-              if (i === j) continue;
-              const pairKey = Math.min(i,j) + '_' + Math.max(i,j);
-              if (checked.has(pairKey)) continue;
-              checked.add(pairKey);
-
-              const o7j = j * 7;
-              const d = dist3d(
-                cpuData[o7i], cpuData[o7i+1], cpuData[o7i+2],
-                cpuData[o7j], cpuData[o7j+1], cpuData[o7j+2]
-              );
-              if (d < maxDist) {
-                closePairs.push({ i, j, dist: d });
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Sort by distance and limit
-  closePairs.sort((a, b) => a.dist - b.dist);
-  const numLines = Math.min(closePairs.length, maxLines);
-
-  for (let l = 0; l < numLines; l++) {
-    const { i, j } = closePairs[l];
-    const o7i = i * 7, o7j = j * 7;
-    const lp = l * 6;
-    constellationPositions[lp] = cpuData[o7i];
-    constellationPositions[lp+1] = cpuData[o7i+1];
-    constellationPositions[lp+2] = cpuData[o7i+2];
-    constellationPositions[lp+3] = cpuData[o7j];
-    constellationPositions[lp+4] = cpuData[o7j+1];
-    constellationPositions[lp+5] = cpuData[o7j+2];
-  }
-
-  constellationLines.geometry.setDrawRange(0, numLines * 2);
-  constellationLines.geometry.attributes.position.needsUpdate = true;
-}
-
-// ==================== ENERGY BRIDGE ====================
-let bridgeParticles = null;
-let bridgeSystem = null;
-
-function createEnergyBridge() {
-  const count = 300;
-  bridgeSystem = createParticleSystem(count);
-  for (let i = 0; i < count; i++) {
-    const t = i / count;
-    bridgeSystem.cpuData[i*7] = (Math.random()-0.5)*2;
-    bridgeSystem.cpuData[i*7+1] = (Math.random()-0.5)*2;
-    bridgeSystem.cpuData[i*7+2] = (Math.random()-0.5)*2;
-    bridgeSystem.positions[i*3] = 0;
-    bridgeSystem.colors[i*3] = 0.5;
-    bridgeSystem.colors[i*3+1] = 0.8;
-    bridgeSystem.colors[i*3+2] = 1.0;
-    bridgeSystem.sizes[i] = 2.0 + Math.random() * 2;
-  }
-  bridgeSystem.baseSizes = new Float32Array(count);
-  for (let i = 0; i < count; i++) bridgeSystem.baseSizes[i] = 2.0 + Math.random() * 2;
-  bridgeSystem.points.visible = false;
-}
-
-createEnergyBridge();
-
-function updateEnergyBridge(dt) {
-  const h0 = handStates[0], h1 = handStates[1];
-  const bothPresent = h0.present && h1.present && bridgeSystem;
-
-  if (!bridgeSystem) return;
-  bridgeSystem.points.visible = bothPresent;
-
-  if (!bothPresent) return;
-
-  const { cpuData, count } = bridgeSystem;
-  const cx1 = h0.center.x, cy1 = h0.center.y, cz1 = h0.center.z;
-  const cx2 = h1.center.x, cy2 = h1.center.y, cz2 = h1.center.z;
-  const midX = (cx1 + cx2) / 2, midY = (cy1 + cy2) / 2, midZ = (cz1 + cz2) / 2;
-  const bridgeDist = dist3d(cx1, cy1, cz1, cx2, cy2, cz2);
-
-  for (let i = 0; i < count; i++) {
-    const t = i / count;
-    const o7 = i * 7;
-
-    // Bezier curve between hands
-    const u = 1 - t;
-    const cpx = midX, cpy = midY + bridgeDist * 0.3, cpz = midZ;
-    const px = u*u*cx1 + 2*u*t*cpx + t*t*cx2;
-    const py = u*u*cy1 + 2*u*t*cpy + t*t*cy2;
-    const pz = u*u*cz1 + 2*u*t*cpz + t*t*cz2;
-
-    // Add random offset for thickness
-    const offsetX = (Math.random() - 0.5) * 0.3;
-    const offsetY = (Math.random() - 0.5) * 0.3;
-    const offsetZ = (Math.random() - 0.5) * 0.3;
-
-    cpuData[o7] = px + offsetX;
-    cpuData[o7+1] = py + offsetY;
-    cpuData[o7+2] = pz + offsetZ;
-    cpuData[o7+3] = 0; cpuData[o7+4] = 0; cpuData[o7+5] = 0;
-    cpuData[o7+6] = (cpuData[o7+6] + dt * 0.2) % 1.0;
-
-    bridgeSystem.positions[i*3] = cpuData[o7];
-    bridgeSystem.positions[i*3+1] = cpuData[o7+1];
-    bridgeSystem.positions[i*3+2] = cpuData[o7+2];
-    bridgeSystem.colors[i*3] = 0.3 + t * 0.7;
-    bridgeSystem.colors[i*3+1] = 0.6 + t * 0.4;
-    bridgeSystem.colors[i*3+2] = 0.8 + t * 0.2;
-  }
-  uploadParticleData(bridgeSystem);
-}
 
 // ==================== UTILITY ====================
 function lerp(a, b, t) { return a + (b - a) * t; }
@@ -1270,198 +1075,11 @@ function dist3d(ax, ay, az, bx, by, bz) {
   return Math.sqrt(dx*dx + dy*dy + dz*dz);
 }
 
+
 // ==================== GLOBAL STATE ====================
-let smoothedHands = [
-  { present: false, center: {x:0,y:0,z:5}, fingertip: {x:0,y:0,z:5}, gesture: 'None', confidence: 0, prevGesture: 'None' },
-  { present: false, center: {x:0,y:0,z:5}, fingertip: {x:0,y:0,z:5}, gesture: 'None', confidence: 0, prevGesture: 'None' },
-];
-let gestureSwitchTime = 0;
-let gestureComboCount = 0;
-let lastGestureSwitchTime = 0;
 let noHandTimer = 0;
 let ambientMode = false;
-let handEnterTransition = 0;
 let totalEnergy = 0;
-
-// ==================== PARTICLE UPDATE ====================
-function computeGestureForces(px, py, pz, hand) {
-  const dx = hand.center.x - px;
-  const dy = hand.center.y - py;
-  const dz = hand.center.z - pz;
-  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) + 0.001;
-  const nx = dx / dist, ny = dy / dist, nz = dz / dist;
-
-  const gesture = hand.gesture;
-
-  switch (gesture) {
-    case 'Open_Palm':
-      if (dist > 3.0) {
-        const s = 0.018 / (dist * 0.5);
-        return { fx: nx*s, fy: ny*s, fz: nz*s };
-      } else if (dist > 0.5) {
-        const orbit = 0.035;
-        return { fx: -nz*orbit + nx*0.003, fy: ny*0.003, fz: nx*orbit + nz*0.003 };
-      } else {
-        const s = -0.08 * (1 - dist/0.5);
-        return { fx: nx*s, fy: ny*s, fz: nz*s };
-      }
-    case 'Closed_Fist':
-      const rs = -0.07 / (dist*dist*0.3 + 0.1);
-      return { fx: nx*rs, fy: ny*rs, fz: nz*rs };
-    case 'Pointing_Up':
-      const tdx = hand.fingertip.x - px;
-      const tdy = hand.fingertip.y - py;
-      const tdz = hand.fingertip.z - pz;
-      const td = Math.sqrt(tdx*tdx + tdy*tdy + tdz*tdz) + 0.001;
-      if (td < 2.0) {
-        // respawn at fingertip
-        return {
-          fx: 0, fy: 0, fz: 0,
-          respawn: {
-            x: hand.fingertip.x + (Math.random()-0.5)*0.3,
-            y: hand.fingertip.y + (Math.random()-0.5)*0.3,
-            z: hand.fingertip.z + (Math.random()-0.5)*0.3,
-            vx: (Math.random()-0.5)*0.04,
-            vy: 0.05 + Math.random()*0.08,
-            vz: (Math.random()-0.5)*0.04,
-          }
-        };
-      }
-      const as = 0.015 / (td*0.5 + 0.1);
-      return { fx: tdx*as, fy: tdy*as, fz: tdz*as };
-    case 'Victory':
-      const sa = 0.6;
-      const fxv = Math.cos(sa)*nx - Math.sin(sa)*nz;
-      const fzv = Math.sin(sa)*nx + Math.cos(sa)*nz;
-      const vs = 0.025 / (dist*0.3 + 0.2);
-      return { fx: fxv*vs, fy: ny*vs*0.3, fz: fzv*vs };
-    case 'ILoveYou':
-      // Spiral upward
-      const spirX = -nz * 0.04 + nx * 0.005;
-      const spirZ = nx * 0.04 + nz * 0.005;
-      const spirY = 0.03 / (dist*0.3 + 0.3);
-      return { fx: spirX, fy: spirY, fz: spirZ };
-    case 'Thumb_Up':
-      return { fx: nx*0.005, fy: 0.03/(dist*0.4+0.2), fz: nz*0.005 };
-    case 'Thumb_Down':
-      return { fx: nx*0.005, fy: -0.03/(dist*0.4+0.2), fz: nz*0.005 };
-    default: // None — gentle attraction
-      const ws = 0.004 / (dist*0.5 + 0.3);
-      return { fx: nx*ws, fy: ny*ws, fz: nz*ws };
-  }
-}
-
-function updateParticles(system, hands, dt, isAmbient) {
-  const { cpuData, count } = system;
-  const DAMPING = 0.97;
-  const MAX_SPEED = 0.18;
-  const time = performance.now() * 0.001;
-
-  for (let i = 0; i < count; i++) {
-    const o7 = i * 7;
-    let px = cpuData[o7], py = cpuData[o7+1], pz = cpuData[o7+2];
-    let vx = cpuData[o7+3], vy = cpuData[o7+4], vz = cpuData[o7+5];
-
-    let tfx = 0, tfy = 0, tfz = 0;
-    let hasRespawn = false;
-
-    for (const hand of hands) {
-      if (!hand.present) continue;
-      const f = computeGestureForces(px, py, pz, hand);
-      if (f.respawn && !isAmbient) {
-        // Interactive particles respawn at fingertip
-        px = f.respawn.x; py = f.respawn.y; pz = f.respawn.z;
-        vx = f.respawn.vx; vy = f.respawn.vy; vz = f.respawn.vz;
-        hasRespawn = true;
-      } else {
-        tfx += f.fx || 0; tfy += f.fy || 0; tfz += f.fz || 0;
-      }
-    }
-
-    // Two-hand bridge
-    if (hands[0]?.present && hands[1]?.present) {
-      const h1 = hands[0].center, h2 = hands[1].center;
-      const midX = (h1.x + h2.x) / 2, midY = (h1.y + h2.y) / 2, midZ = (h1.z + h2.z) / 2;
-      const bdx = midX - px, bdy = midY - py, bdz = midZ - pz;
-      const bd = Math.sqrt(bdx*bdx + bdy*bdy + bdz*bdz) + 0.001;
-      const bs = 0.012 / (bd*bd*0.5 + 0.5);
-      tfx += bdx * bs; tfy += bdy * bs; tfz += bdz * bs;
-    }
-
-    // Ambient drift
-    if (hands.every(h => !h.present) || isAmbient) {
-      const na = Math.sin(i * 0.01 + time * 0.3) * 0.3;
-      tfx += Math.cos(na + i) * 0.0006;
-      tfy += Math.sin(na * 1.3 + i) * 0.0006;
-      tfz += Math.cos(na * 0.7 + i) * 0.0004;
-    }
-
-    if (!hasRespawn) {
-      vx += tfx * dt; vy += tfy * dt; vz += tfz * dt;
-    }
-
-    vx *= DAMPING; vy *= DAMPING; vz *= DAMPING;
-    const spd = Math.sqrt(vx*vx + vy*vy + vz*vz);
-    if (spd > MAX_SPEED) { const s = MAX_SPEED / spd; vx *= s; vy *= s; vz *= s; }
-
-    px += vx; py += vy; pz += vz;
-
-    // Soft sphere boundary
-    const br = Math.sqrt(px*px + py*py + pz*pz);
-    if (br > 17) {
-      const s = 17 / br;
-      px *= s; py *= s; pz *= s;
-      const dot = vx*px + vy*py + vz*pz;
-      const reflect = 2 * dot / (br*br) * 0.3;
-      vx -= reflect * px; vy -= reflect * py; vz -= reflect * pz;
-    }
-
-    cpuData[o7] = px; cpuData[o7+1] = py; cpuData[o7+2] = pz;
-    cpuData[o7+3] = vx; cpuData[o7+4] = vy; cpuData[o7+5] = vz;
-    cpuData[o7+6] = (cpuData[o7+6] + dt * 0.08) % 1.0;
-  }
-}
-
-function updateParticleColors(system, hands, isAmbient) {
-  const { colors, cpuData, count } = system;
-  const hasHand = hands.some(h => h.present);
-
-  for (let i = 0; i < count; i++) {
-    const o7 = i * 7;
-    const px = cpuData[o7], py = cpuData[o7+1], pz = cpuData[o7+2];
-
-    if (isAmbient) {
-      // Ambient colors stay in cyan range; brighten slightly near hands
-      let brightness = 1.0;
-      if (hasHand) {
-        let minDist = 999;
-        for (const h of hands) {
-          if (!h.present) continue;
-          const d = dist3d(px, py, pz, h.center.x, h.center.y, h.center.z);
-          if (d < minDist) minDist = d;
-        }
-        brightness = 1.0 + Math.max(0, 1.0 - minDist / 6.0) * 1.5;
-      }
-      colors[i*3] = clamp(colors[i*3] * brightness, 0, 1);
-      colors[i*3+1] = clamp(colors[i*3+1] * brightness, 0, 1);
-      colors[i*3+2] = clamp(colors[i*3+2] * brightness, 0, 1);
-    } else {
-      // Interactive: shift toward white near hands
-      let minDist = 999;
-      for (const h of hands) {
-        if (!h.present) continue;
-        const d = dist3d(px, py, pz, h.center.x, h.center.y, h.center.z);
-        if (d < minDist) minDist = d;
-      }
-      const glow = hasHand ? Math.max(0, 1.0 - minDist / 5.0) : 0;
-      const baseR = 0.0, baseG = 0.55, baseB = 0.75;
-      colors[i*3] = lerp(baseR, 1.0, glow);
-      colors[i*3+1] = lerp(baseG, 1.0, glow);
-      colors[i*3+2] = lerp(baseB, 1.0, glow);
-    }
-  }
-  system.geometry.attributes.customColor.needsUpdate = true;
-}
 
 // ==================== HAND STATE ====================
 class SmoothedHand {
@@ -2111,18 +1729,9 @@ function updateAudioEngine(dt, particleSystem, hands) {
     audioEngine.ambientFilter.frequency.value = lerp(audioEngine.ambientFilter.frequency.value, targetFreq, dt * 0.5);
   }
 
-  // Particle audio based on density
-  const { cpuData, count } = particleSystem;
-  // Quick density estimate: count particles within central area
-  let inCenter = 0;
-  const SAMPLE = Math.min(500, count);
-  for (let i = 0; i < SAMPLE; i++) {
-    const idx = Math.floor(Math.random() * count) * 7;
-    const d = Math.sqrt(cpuData[idx]*cpuData[idx] + cpuData[idx+1]*cpuData[idx+1] + cpuData[idx+2]*cpuData[idx+2]);
-    if (d < 6) inCenter++;
-  }
-  const density = inCenter / SAMPLE;
-  const avgX = 0; // approximate
+  // Particle audio: use totalEnergy as density proxy (GPGPU has no CPU-side data)
+  const density = totalEnergy;
+  const avgX = (hands[0]?.present ? hands[0].center.x * 0.05 : 0) + (hands[1]?.present ? hands[1].center.x * 0.05 : 0);
 
   if (density > 0.1) {
     triggerParticleSound(density, avgX);
@@ -2290,43 +1899,25 @@ function animate(timestamp) {
   }
   totalEnergy = clamp(totalEnergy, 0, 1);
 
-  // Gesture change → spawn energy ring + sounds
+  // Gesture change → sounds + combo
   for (const h of handStates) {
     if (h.present && h.gesture !== h.prevGesture && h.gesture !== 'None' && h.confidence > 0.6) {
-      spawnEnergyRing(h.center.x, h.center.y, h.center.z);
       triggerEnergyPulseSound();
       triggerGestureSound(h.gesture, h.confidence, h.center.x);
+      modeManager.registerGesture(h.gesture);
       h.prevGesture = h.gesture;
     }
   }
 
-  // === Particle updates (skip some with adaptive quality) ===
-  const updateAll = adaptiveQuality > 0.7 || frameCount % Math.ceil(2 / Math.max(adaptiveQuality, 0.3)) === 0;
+  // === GPGPU Particle Simulation (GPU physics) ===
+  gpgpuSimulate(dt);
 
-  updateParticles(ambientSystem, handArray, dt, true);
-  updateParticles(interactiveSystem, handArray, dt, false);
-
-  if (updateAll) {
-    updateParticleColors(ambientSystem, handArray, true);
-    updateParticleColors(interactiveSystem, handArray, false);
-  }
-
-  uploadParticleData(ambientSystem);
-  uploadParticleData(interactiveSystem);
-
-  // Phase 6-7: Visual effects (skip some when quality is low)
-  if (adaptiveQuality > 0.5) updateTrails(interactiveSystem, dt);
+  // Hand wireframe (keep)
   updateHandWireframe();
-  updateEnergyRings(dt);
-
-  if (updateAll && CFG.maxLines > 0) {
-    updateConstellationLines(interactiveSystem);
-  }
-
-  updateEnergyBridge(dt);
 
   // Audio update
-  updateAudioEngine(dt, interactiveSystem, handArray);
+  updateAudioEngine(dt, { cpuData: new Float32Array(0), count: 0 }, handArray);
+  audioEngine._densityOverride = totalParticles > 0 ? clamp(totalEnergy, 0.1, 1.0) : 0;
 
   // Update shader uniforms
   nebulaMat.uniforms.uTime.value = timestamp * 0.001;
@@ -2449,9 +2040,22 @@ let renderErrors = 0;
       ' | Scene:'+(typeof scene!=='undefined'?scene.children.length:'?')+
       ' | Canvas:'+(typeof canvas!=='undefined'?canvas.width+'x'+canvas.height:'?')+
       (typeof webglLost!=='undefined'&&webglLost?'\n⚠ WebGL LOST':'')+
+      ' | Mode:'+(typeof modeManager!=='undefined'?modeManager.current:'?')+
+      ' | P:'+(typeof totalParticles!=='undefined'?totalParticles:'?')+
       (typeof gestureRecognizer!=='undefined'&&gestureRecognizer?'\n✅ Model ready':'\n⏳ Model loading...');
   },1000);
 })();
+
+// Init GPGPU particle system (100K desktop, 20K mobile)
+const gpgpuCount = DEVICE.isMobile ? 20000 : 100000;
+setupGPGPU(gpgpuCount);
+
+// Mode switching keyboard
+window.addEventListener('keydown', (e) => {
+  if (e.key === '1') modeManager.switchTo('blackhole');
+  if (e.key === '2') modeManager.switchTo('energy');
+  if (e.key === '3') modeManager.switchTo('flow');
+});
 
 // Start render loop immediately (nebula always renders)
 // Start preloading model in background

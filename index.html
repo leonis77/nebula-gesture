@@ -59,7 +59,7 @@
   video#v {
     position: fixed; top: 0; left: 0;
     width: 320px; height: 240px;
-    opacity: 0.001; pointer-events: none; z-index: -1;
+    opacity: 0; pointer-events: none; z-index: -1;
     transform: scaleX(-1);
   }
 
@@ -1554,11 +1554,25 @@ async function setupCamera() {
 
   video.srcObject = stream;
   await video.play();
-  console.log('📷 Video playing, waiting for data...');
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('视频数据超时(10s)')), 10000);
-    video.onloadeddata = () => { clearTimeout(timeout); resolve(); };
-  });
+  console.log('📷 Video playing...');
+
+  // MediaStream videos may not fire 'loadeddata'. Use readyState polling + events.
+  if (video.readyState < 2) {
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('视频数据超时(10s)')), 10000);
+      const check = () => {
+        if (video.readyState >= 2) { clearTimeout(timeout); resolve(); }
+      };
+      video.addEventListener('loadeddata', check, { once: true });
+      video.addEventListener('loadedmetadata', check, { once: true });
+      video.addEventListener('playing', check, { once: true });
+      // Also poll every 100ms as safety net
+      const interval = setInterval(() => {
+        if (video.readyState >= 2) { clearTimeout(timeout); clearInterval(interval); resolve(); }
+      }, 100);
+    });
+  }
+
   loadState.camera = 1;
   console.log('📷 Camera ready:', video.videoWidth, 'x', video.videoHeight);
 }

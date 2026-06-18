@@ -391,10 +391,10 @@ const DEVICE = {
 
 // ==================== CONFIGURATION ====================
 const CONFIGS = {
-  ultra:  { ambient:5000, interactive:2000, trailLen:8, maxLines:800,  rings:5, bloom:1.5, dpr:2,   detectFps:30, camW:640, camH:480, chromaticAberration:true,  nebulaLayers:3, handDetail:'full' },
-  high:   { ambient:4000, interactive:1500, trailLen:6, maxLines:500,  rings:4, bloom:1.2, dpr:2,   detectFps:30, camW:640, camH:480, chromaticAberration:true,  nebulaLayers:3, handDetail:'full' },
-  medium: { ambient:2500, interactive:1000, trailLen:4, maxLines:300,  rings:2, bloom:0.8, dpr:1.5, detectFps:25, camW:480, camH:360, chromaticAberration:false, nebulaLayers:2, handDetail:'simple' },
-  low:    { ambient:1500, interactive:600,  trailLen:2, maxLines:0,    rings:1, bloom:0.5, dpr:1,   detectFps:20, camW:320, camH:240, chromaticAberration:false, nebulaLayers:1, handDetail:'fingertips' },
+  ultra:  { ambient:5000, interactive:2000, trailLen:8, maxLines:800,  rings:5, bloom:0.8, dpr:2,   detectFps:30, camW:640, camH:480, chromaticAberration:true,  nebulaLayers:3, handDetail:'full' },
+  high:   { ambient:4000, interactive:1500, trailLen:6, maxLines:500,  rings:4, bloom:0.6, dpr:2,   detectFps:30, camW:640, camH:480, chromaticAberration:true,  nebulaLayers:3, handDetail:'full' },
+  medium: { ambient:2500, interactive:1000, trailLen:4, maxLines:300,  rings:2, bloom:0.4, dpr:1.5, detectFps:25, camW:480, camH:360, chromaticAberration:false, nebulaLayers:2, handDetail:'simple' },
+  low:    { ambient:1500, interactive:600,  trailLen:2, maxLines:0,    rings:1, bloom:0.3, dpr:1,   detectFps:20, camW:320, camH:240, chromaticAberration:false, nebulaLayers:1, handDetail:'fingertips' },
 };
 const CFG = CONFIGS[DEVICE.profile];
 
@@ -689,10 +689,7 @@ let gpgpuEnabled = false;
 let fboA, fboB, simMaterial, simScene, simCamera, simQuad;
 let particleRenderPoints, particleTexWidth, particleTexHeight, totalParticles;
 
-function checkGPGPUSupport() {
-  const gl = renderer.getContext();
-  return !!(gl.getExtension('EXT_color_buffer_float') && gl.getExtension('OES_texture_float'));
-}
+function checkGPGPUSupport() { return renderer.capabilities.isWebGL2; }
 
 function setupGPGPU(particleCount) {
   gpgpuEnabled = checkGPGPUSupport();
@@ -702,7 +699,7 @@ function setupGPGPU(particleCount) {
   }
 
   totalParticles = particleCount;
-  particleTexWidth = Math.max(512, Math.pow(2, Math.ceil(Math.log2(Math.sqrt(particleCount * 2)))));
+  particleTexWidth = Math.max(512, Math.pow(2, Math.ceil(Math.log2(particleCount))));
   particleTexHeight = 2;
   const W = particleTexWidth, H = particleTexHeight;
   const totalPixels = W * H;
@@ -710,7 +707,7 @@ function setupGPGPU(particleCount) {
   console.log('GPGPU: ' + particleCount + ' particles, texture ' + W + 'x' + H);
 
   // Create Float FBOs
-  const fboOpts = { type: THREE.FloatType, format: THREE.RGBAFormat,
+  const fboOpts = { type: THREE.HalfFloatType, format: THREE.RGBAFormat,
     minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
     depthBuffer: false, stencilBuffer: false };
   fboA = new THREE.WebGLRenderTarget(W, H, fboOpts);
@@ -722,7 +719,7 @@ function setupGPGPU(particleCount) {
 
   for (let i = 0; i < particleCount; i++) {
     const i4 = i * 4;
-    const r = 3 + Math.random() * 12;
+    const r = 5 + Math.random() * 18;
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.acos(2 * Math.random() - 1);
     dataA[i4] = r * Math.sin(phi) * Math.cos(theta);
@@ -817,6 +814,7 @@ void main() {
 
   const renderGeo = new THREE.BufferGeometry();
   renderGeo.setAttribute('aIndex', new THREE.BufferAttribute(idxArr, 2));
+  renderGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(particleCount * 3), 3)); // required by THREE.js for Points
   renderGeo.setDrawRange(0, particleCount);
 
   const RENDER_VERT = `attribute vec2 aIndex;
@@ -828,7 +826,7 @@ void main() {
   float uvX = (aIndex.x + 0.5) / uTexWidth;
   vec4 sA = texture2D(uStateA, vec2(uvX, 0.25));
   vec4 sB = texture2D(uStateB, vec2(uvX, 0.75));
-  vec3 pos = sA.rgb; float sz = sB.a * 3.5;
+  vec3 pos = sA.rgb; float sz = sB.a * 1.8;
   vec4 mv = modelViewMatrix * vec4(pos, 1.0);
   float pulse = 1.0 + sin(sB.b * 6.283) * 0.25;
   gl_PointSize = clamp(sz * pulse * (280.0 / -mv.z), 0.5, 12.0);
@@ -1080,6 +1078,9 @@ function dist3d(ax, ay, az, bx, by, bz) {
 let noHandTimer = 0;
 let ambientMode = false;
 let totalEnergy = 0;
+let lastGestureSwitchTime = 0;
+let gestureComboCount = 0;
+let gestureSwitchTime = 0;
 
 // ==================== HAND STATE ====================
 class SmoothedHand {
@@ -1866,17 +1867,13 @@ function animate(timestamp) {
   const hasAnyHand = handStates.some(h => h.present);
   if (hasAnyHand) {
     noHandTimer = 0;
-    if (ambientMode) {
-      ambientMode = false;
-      handEnterTransition = 1.5;
-    }
+    ambientMode = false;
   } else {
     noHandTimer += dt;
     if (noHandTimer > 15 && !ambientMode) {
       ambientMode = true;
     }
   }
-  if (handEnterTransition > 0) handEnterTransition -= dt;
 
   // Gesture combo detection
   for (const h of handStates) {

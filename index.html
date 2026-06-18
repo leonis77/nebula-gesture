@@ -331,14 +331,27 @@
     <div class="icon">📷</div>
     <h2>请允许摄像头权限</h2>
     <p>NEBULA 通过摄像头识别手势，<br>让你用双手与粒子互动</p>
-    <button id="start-camera-btn">开启摄像头</button>
+    <button id="start-camera-btn" onclick="console.log('🔘 Button clicked (inline)')">开启摄像头</button>
     <div class="model-status" id="model-status">模型加载中...</div>
     <p class="privacy">🔒 视频数据完全在本地处理，不会上传</p>
   </div>
 </div>
 
 <script type="module">
+// Global error catch — ensure we know if module loading fails
+window.addEventListener('error', (e) => {
+  if (e.target === document || e.target === window) return;
+  console.error('🔥 Global error:', e.message, e.filename, e.lineno);
+  const btn = document.getElementById('start-camera-btn');
+  if (btn) { btn.textContent = 'JS错误: ' + e.message.slice(0,15); btn.disabled = false; }
+});
+window.onunhandledrejection = (e) => {
+  console.error('🔥 Unhandled rejection:', e.reason?.message || e.reason);
+};
+
+console.log('📦 Module script starting...');
 import * as THREE from 'three';
+console.log('✅ Three.js imported');
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';

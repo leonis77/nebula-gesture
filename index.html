@@ -1525,8 +1525,22 @@ const handStates = [new SmoothedHand(), new SmoothedHand()];
 // Global loading progress tracking
 let loadState = { wasm: 0, model: 0, camera: 0, ready: false };
 
+async function checkCameraPermission() {
+  try {
+    const status = await navigator.permissions.query({ name: 'camera' });
+    return status.state; // 'granted', 'denied', 'prompt'
+  } catch { return 'unknown'; }
+}
+
 async function setupCamera() {
   console.log('📷 Requesting camera...');
+
+  // Pre-check permission
+  const perm = await checkCameraPermission();
+  if (perm === 'denied') {
+    throw new Error('摄像头权限已被阻止。点击地址栏锁图标→允许摄像头→刷新页面');
+  }
+
   loadState.camera = 0.2;
 
   const stream = await Promise.race([
@@ -2106,44 +2120,67 @@ function showToast(msg, duration = 3000) {
   if (duration > 0) toastTimer = setTimeout(() => toast.classList.remove('show'), duration);
 }
 
-// ==================== CAMERA PROMPT ====================
-startCameraBtn.addEventListener('click', async () => {
+// ==================== STARTUP: Simplified, robust flow ====================
+// On page load: show nebula + camera prompt immediately
+// Model loads in background — doesn't block anything
+// Camera is optional — nebula is beautiful on its own
+
+async function fullStartup() {
   startCameraBtn.disabled = true;
   startCameraBtn.textContent = '启动中...';
+  startCameraBtn.style.color = '';
+  startCameraBtn.style.borderColor = '';
 
+  let cameraOk = false;
+
+  // Step 1: Try camera
   try {
-    // Camera first (fast)
     await setupCamera();
     loadState.camera = 1;
-
-    // Hide prompts, show nebula
-    cameraPrompt.classList.add('hidden');
-    loadingScreen.classList.add('fade-out');
-
-    // Model might still be loading — show toast
-    if (!gestureRecognizer) {
-      showToast('模型加载中...', 0); // persistent until model ready
-      await setupMediaPipe();
-    }
-
-    loadState.ready = true;
-    showToast('✨ 已就绪 — 试试做手势吧', 4000);
-    updateModelStatus('已就绪 ✨', true);
-
-    initAudio();
-    showHints();
+    cameraOk = true;
   } catch (e) {
-    const msg = e.message || String(e);
-    console.error('Startup error:', msg);
+    console.warn('⚠️ Camera unavailable:', e.message);
+  }
+
+  // Step 2: Camera failed → show troubleshooting, don't hide prompt
+  if (!cameraOk) {
+    const card = cameraPrompt.querySelector('.card');
+    if (card) {
+      card.querySelector('h2').textContent = '摄像头未连接';
+      card.querySelector('p').innerHTML = '点击地址栏左侧 🔒 图标<br>将摄像头设为"允许"后刷新';
+    }
+    startCameraBtn.textContent = '重试连接';
     startCameraBtn.disabled = false;
-    startCameraBtn.textContent = '重试';
     startCameraBtn.style.color = '#FF4081';
     startCameraBtn.style.borderColor = '#FF4081';
-    // Show error both on button and in toast
-    startCameraBtn.textContent = msg.slice(0, 20);
-    showToast('启动失败: ' + msg, 10000);
+    return; // Stay on prompt screen
   }
-});
+
+  // Step 3: Camera OK → hide prompts, show nebula
+  cameraPrompt.classList.add('hidden');
+  loadingScreen.classList.add('fade-out');
+
+  // Step 4: Wait for model if needed
+  if (!gestureRecognizer) {
+    showToast('模型加载中...', 0);
+    try {
+      await setupMediaPipe();
+      loadState.model = 1;
+    } catch (e) {
+      console.warn('⚠️ Model unavailable:', e.message);
+      showToast('模型加载失败 — 纯享星云模式', 6000);
+      return;
+    }
+  }
+
+  // Step 5: All systems go
+  loadState.ready = true;
+  showToast('✨ 已就绪 — 试试做手势吧', 4000);
+  updateModelStatus('已就绪 ✨', true);
+  initAudio();
+  showHints();
+}
+startCameraBtn.addEventListener('click', fullStartup);
 
 // ==================== ANIMATION LOOP ====================
 let frameCount = 0;

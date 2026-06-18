@@ -352,7 +352,6 @@ console.log('✅ Three.js imported');
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 // ==================== DEVICE DETECTION ====================
@@ -540,51 +539,40 @@ const NEBULA_VERTEX = /* glsl */`
   }
 `;
 
-const NEBULA_FRAGMENT = /* glsl */`
-  varying vec3 vWorldPos;
-  varying vec3 vViewDir;
-  uniform float uTime;
-  uniform int uLayers;
-
-  ${NOISE_GLSL}
-
-  void main() {
-    vec3 dir = normalize(vWorldPos);
-
-    // Layer 1: large-scale cyan nebula clouds
-    float n1 = fbm(dir * 3.0 + uTime * 0.02, uLayers);
-    // Layer 2: medium-scale purple/magenta nebula
-    float n2 = fbm(dir * 5.0 + vec3(0.5, 1.2, 0.8) + uTime * 0.015, uLayers);
-    // Layer 3: fine star-like details
-    float n3 = snoise(dir * 12.0 + uTime * 0.04);
-
-    // Cyan nebula
-    float cyanMask = smoothstep(0.0, 0.8, n1 * 0.7 + 0.5);
-    vec3 cyanNebula = mix(
-      vec3(0.008, 0.0, 0.094),   // deep space
-      vec3(0.0, 0.72, 0.92),     // cyan
-      cyanMask * 0.35
-    );
-
-    // Purple nebula
-    float purpleMask = smoothstep(0.1, 0.7, n2 * 0.6 + 0.4);
-    vec3 purpleNebula = mix(
-      vec3(0.008, 0.0, 0.094),
-      vec3(0.49, 0.3, 0.98),     // purple
-      purpleMask * 0.3
-    );
-
-    // Stars
-    float starField = smoothstep(0.92, 1.0, n3);
-    vec3 stars = vec3(starField * 0.4);
-
-    vec3 color = vec3(0.008, 0.0, 0.094) + cyanNebula + purpleNebula + stars;
-
-    // Vignette
-    float vignette = 1.0 - length(vViewDir.xy) * 0.35;
-    color *= vignette;
-
-    gl_FragColor = vec4(color, 1.0);
+	const NEBULA_FRAGMENT = /* glsl */`
+	  varying vec3 vWorldPos;
+	  varying vec3 vViewDir;
+	  uniform float uTime;
+	  uniform int uLayers;
+	
+	  ${NOISE_GLSL}
+	
+	  void main() {
+	    vec3 dir = normalize(vWorldPos);
+	    float n1 = fbm(dir * 2.5 + uTime * 0.015, uLayers);
+	    float n2 = fbm(dir * 4.5 + vec3(1.2, 0.8, 0.3) + uTime * 0.02, uLayers);
+	    float n3 = fbm(dir * 7.0 + vec3(0.3, 1.5, 0.6) + uTime * 0.025, uLayers);
+	    vec3 color = vec3(0.004, 0.002, 0.03);
+	    float cyanCloud = smoothstep(-0.2, 0.9, n1 * 0.8 + 0.3);
+	    color = mix(color, vec3(0.1, 0.6, 0.95), cyanCloud * 0.7);
+	    color = mix(color, vec3(0.3, 0.85, 1.0), cyanCloud * 0.3);
+	    float purpleCloud = smoothstep(0.0, 0.8, n2 * 0.7 + 0.25);
+	    color = mix(color, vec3(0.5, 0.15, 0.7), purpleCloud * 0.55);
+	    color = mix(color, vec3(0.9, 0.35, 0.65), purpleCloud * 0.25);
+	    float filaments = abs(n3) * 0.5 + 0.5;
+	    float filamentMask = smoothstep(0.55, 0.85, filaments);
+	    color = mix(color, vec3(0.5, 0.7, 0.95), filamentMask * 0.35);
+	    float stars1 = smoothstep(0.97, 1.0, snoise(dir * 25.0 + uTime * 0.003));
+	    float stars2 = smoothstep(0.94, 1.0, snoise(dir * 40.0 - uTime * 0.005));
+	    float stars3 = smoothstep(0.995, 1.0, snoise(dir * 60.0 + uTime * 0.001));
+	    float twinkle = sin(dir.x * 100.0 + uTime * 2.0) * sin(dir.y * 87.0 + uTime * 1.7) * 0.5 + 0.5;
+	    float starBright = stars1 * 0.5 + stars2 * 0.35 + stars3 * 0.7 * twinkle;
+	    color += vec3(starBright * 0.9, starBright * 0.85, starBright * 1.0);
+	    float centerGlow = exp(-length(dir.xy) * 1.5) * 0.08;
+	    color += vec3(0.15, 0.05, 0.02) * centerGlow;
+	    float vignette = 1.0 - length(vViewDir.xy) * 0.25;
+	    color *= vignette;
+	    gl_FragColor = vec4(color, 1.0);
   }
 `;
 
@@ -687,8 +675,8 @@ if (CFG.chromaticAberration) {
   composer.addPass(chromaticPass);
 }
 
-const outputPass = new OutputPass();
-composer.addPass(outputPass);
+// OutputPass removed — causes white screen in Three.js 0.182 + Vercel
+// Renderer toneMapping handles final output directly
 
 // ==================== PARTICLE SYSTEM ====================
 function createParticleSystem(count) {
@@ -2348,15 +2336,7 @@ function animate(timestamp) {
   bloomPass.strength = lerp(CFG.bloom, CFG.bloom * 1.3, totalEnergy);
 
   // Render (with error guard so one bad frame doesn't crash everything)
-  try {
-    // DEBUG: first 2 seconds render raw (no postprocessing) to isolate white mask
-    if (frameRenderCount < 120) {
-      renderer.render(scene, camera);
-    } else {
-      composer.render();
-    }
-    frameRenderCount++;
-  } catch (e) { renderErrors++; console.error('Render error:', e); }
+  try { composer.render(); frameRenderCount++; } catch (e) { renderErrors++; console.error('Render error:', e); }
 
   // FPS tracking
   frameCount++;

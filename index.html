@@ -2259,7 +2259,7 @@ function animate(timestamp) {
   // Skip when WebGL lost or tab hidden
   if (webglLost) { requestAnimationFrame(animate); return; }
   if (!pageVisible) {
-    try { composer.render(); } catch (e) {}
+    try { composer.render(); frameRenderCount++; } catch (e) {}
     return;
   }
 
@@ -2349,7 +2349,7 @@ function animate(timestamp) {
   bloomPass.strength = lerp(CFG.bloom, CFG.bloom * 1.3, totalEnergy);
 
   // Render (with error guard so one bad frame doesn't crash everything)
-  try { composer.render(); } catch (e) { console.error('Render error:', e); }
+  try { composer.render(); frameRenderCount++; } catch (e) { renderErrors++; console.error('Render error:', e); }
 
   // FPS tracking
   frameCount++;
@@ -2447,6 +2447,24 @@ console.log('   ⚡ Starting preload + render loop...');
 
 // Diagnostic: log first frame
 let firstFrameRendered = false;
+let frameRenderCount = 0;
+let renderErrors = 0;
+
+// Debug overlay — visible on page even if WebGL fails
+(function(){
+  const d = document.createElement('div');
+  d.id='debug-ui';
+  d.style.cssText='position:fixed;top:8px;left:8px;z-index:999;font:10px/1.5 monospace;color:#0f0;background:rgba(0,0,0,.85);padding:6px 10px;border-radius:6px;pointer-events:none;white-space:pre';
+  document.body.appendChild(d);
+  setInterval(function(){
+    d.textContent='WebGL:'+(typeof renderer!=='undefined'&&renderer.capabilities?renderer.capabilities.isWebGL2?'2':'1':'?')+
+      ' | Frames:'+frameRenderCount+' | Errors:'+renderErrors+
+      ' | Scene:'+(typeof scene!=='undefined'?scene.children.length:'?')+
+      ' | Canvas:'+(typeof canvas!=='undefined'?canvas.width+'x'+canvas.height:'?')+
+      (typeof webglLost!=='undefined'&&webglLost?'\n⚠ WebGL LOST':'')+
+      (typeof gestureRecognizer!=='undefined'&&gestureRecognizer?'\n✅ Model ready':'\n⏳ Model loading...');
+  },1000);
+})();
 
 // Start render loop immediately (nebula always renders)
 // Start preloading model in background

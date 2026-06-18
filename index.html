@@ -391,9 +391,9 @@ const DEVICE = {
 
 // ==================== CONFIGURATION ====================
 const CONFIGS = {
-  ultra:  { ambient:5000, interactive:2000, trailLen:8, maxLines:800,  rings:5, bloom:0.8, dpr:2,   detectFps:30, camW:640, camH:480, chromaticAberration:true,  nebulaLayers:3, handDetail:'full' },
-  high:   { ambient:4000, interactive:1500, trailLen:6, maxLines:500,  rings:4, bloom:0.6, dpr:2,   detectFps:30, camW:640, camH:480, chromaticAberration:true,  nebulaLayers:3, handDetail:'full' },
-  medium: { ambient:2500, interactive:1000, trailLen:4, maxLines:300,  rings:2, bloom:0.4, dpr:1.5, detectFps:25, camW:480, camH:360, chromaticAberration:false, nebulaLayers:2, handDetail:'simple' },
+  ultra:  { ambient:5000, interactive:2000, trailLen:8, maxLines:800,  rings:5, bloom:0.35, dpr:2,   detectFps:30, camW:640, camH:480, chromaticAberration:true,  nebulaLayers:3, handDetail:'full' },
+  high:   { ambient:4000, interactive:1500, trailLen:6, maxLines:500,  rings:4, bloom:0.3, dpr:2,   detectFps:30, camW:640, camH:480, chromaticAberration:true,  nebulaLayers:3, handDetail:'full' },
+  medium: { ambient:2500, interactive:1000, trailLen:4, maxLines:300,  rings:2, bloom:0.2, dpr:1.5, detectFps:25, camW:480, camH:360, chromaticAberration:false, nebulaLayers:2, handDetail:'simple' },
   low:    { ambient:1500, interactive:600,  trailLen:2, maxLines:0,    rings:1, bloom:0.3, dpr:1,   detectFps:20, camW:320, camH:240, chromaticAberration:false, nebulaLayers:1, handDetail:'fingertips' },
 };
 const CFG = CONFIGS[DEVICE.profile];
@@ -552,13 +552,13 @@ const NEBULA_VERTEX = /* glsl */`
 	    float n1 = fbm(dir * 2.5 + uTime * 0.015, uLayers);
 	    float n2 = fbm(dir * 4.5 + vec3(1.2, 0.8, 0.3) + uTime * 0.02, uLayers);
 	    float n3 = fbm(dir * 7.0 + vec3(0.3, 1.5, 0.6) + uTime * 0.025, uLayers);
-	    vec3 color = vec3(0.004, 0.002, 0.03);
+	    vec3 color = vec3(0.001, 0.0, 0.005);
 	    float cyanCloud = smoothstep(-0.2, 0.9, n1 * 0.8 + 0.3);
-	    color = mix(color, vec3(0.1, 0.6, 0.95), cyanCloud * 0.7);
-	    color = mix(color, vec3(0.3, 0.85, 1.0), cyanCloud * 0.3);
+	    color = mix(color, vec3(0.1, 0.6, 0.95), cyanCloud * 0.22);
+	    color = mix(color, vec3(0.3, 0.85, 1.0), cyanCloud * 0.08);
 	    float purpleCloud = smoothstep(0.0, 0.8, n2 * 0.7 + 0.25);
-	    color = mix(color, vec3(0.5, 0.15, 0.7), purpleCloud * 0.55);
-	    color = mix(color, vec3(0.9, 0.35, 0.65), purpleCloud * 0.25);
+	    color = mix(color, vec3(0.5, 0.15, 0.7), purpleCloud * 0.18);
+	    color = mix(color, vec3(0.9, 0.35, 0.65), purpleCloud * 0.06);
 	    float filaments = abs(n3) * 0.5 + 0.5;
 	    float filamentMask = smoothstep(0.55, 0.85, filaments);
 	    color = mix(color, vec3(0.5, 0.7, 0.95), filamentMask * 0.35);
@@ -567,7 +567,7 @@ const NEBULA_VERTEX = /* glsl */`
 	    float stars3 = smoothstep(0.995, 1.0, snoise(dir * 60.0 + uTime * 0.001));
 	    float twinkle = sin(dir.x * 100.0 + uTime * 2.0) * sin(dir.y * 87.0 + uTime * 1.7) * 0.5 + 0.5;
 	    float starBright = stars1 * 0.5 + stars2 * 0.35 + stars3 * 0.7 * twinkle;
-	    color += vec3(starBright * 0.9, starBright * 0.85, starBright * 1.0);
+	    color += vec3(starBright * 0.3, starBright * 0.25, starBright * 0.4);
 	    float centerGlow = exp(-length(dir.xy) * 1.5) * 0.08;
 	    color += vec3(0.15, 0.05, 0.02) * centerGlow;
 	    float vignette = 1.0 - length(vViewDir.xy) * 0.25;
@@ -826,7 +826,7 @@ void main() {
   float uvX = (aIndex.x + 0.5) / uTexWidth;
   vec4 sA = texture2D(uStateA, vec2(uvX, 0.25));
   vec4 sB = texture2D(uStateB, vec2(uvX, 0.75));
-  vec3 pos = sA.rgb; float sz = sB.a * 1.8;
+  vec3 pos = sA.rgb; float sz = sB.a * 2.5;
   vec4 mv = modelViewMatrix * vec4(pos, 1.0);
   float pulse = 1.0 + sin(sB.b * 6.283) * 0.25;
   gl_PointSize = clamp(sz * pulse * (280.0 / -mv.z), 0.5, 12.0);
@@ -906,11 +906,11 @@ function gpgpuSimulate(dt) {
 // ==================== MODE SYSTEM ====================
 class ModeManager {
   constructor() {
-    this.current = 'blackhole';
+    this.current = 'cyber';
     this.modes = {
-      blackhole: { id: 0, name: 'Black Hole', emoji: 'BH', strength: 2.5 },
-      energy:    { id: 1, name: 'Energy Burst', emoji: 'EB', strength: 1.8 },
-      flow:      { id: 2, name: 'Flow', emoji: 'FL', strength: 1.5 },
+      cyber:  { id: 0, name: '赛博朋克', emoji: 'CY', strength: 2.0 },
+      scifi:  { id: 1, name: '科幻唯美', emoji: 'SF', strength: 1.6 },
+      cosmic: { id: 2, name: '宇宙梦境', emoji: 'CS', strength: 1.2 },
     };
     this.comboCount = 0;
     this.lastComboTime = 0;
@@ -918,15 +918,9 @@ class ModeManager {
   getModeId() { return this.modes[this.current].id; }
   getStrength(hand) {
     const base = this.modes[this.current].strength;
-    if (this.current === 'blackhole') {
-      if (hand.gesture === 'Closed_Fist') return base * 1.8;
-      if (hand.gesture === 'Open_Palm') return -base;
-      return base * 0.3;
-    }
-    if (this.current === 'energy') {
-      const spd = Math.sqrt(hand.velocity.x**2 + hand.velocity.y**2 + hand.velocity.z**2);
-      return base * (0.3 + spd * 15);
-    }
+    if (hand.gesture === 'Closed_Fist') return base * 2.5;
+    if (hand.gesture === 'Open_Palm') return -base * 1.5;
+    if (hand.gesture === 'Pointing_Up') return base * 0.2;
     return base * 0.8;
   }
   switchTo(name) {
@@ -1017,6 +1011,59 @@ function createHandWireframe() {
 }
 
 createHandWireframe();
+
+// === Finger trail system ===
+let trailLineGeo, trailLineObj, trailDotGeo, trailDotObj;
+const trailHistory = [[], []]; // per-hand ring buffer: {x,y,z,t}
+const TRAIL_MAX = 120, TRAIL_LIFE = 2.5;
+
+function initTrails() {
+  trailLineGeo = new THREE.BufferGeometry();
+  trailLineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_MAX * 2 * 3), 3));
+  trailLineGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(TRAIL_MAX * 2 * 3), 3));
+  trailLineGeo.setDrawRange(0, 0);
+  trailLineObj = new THREE.LineSegments(trailLineGeo, new THREE.LineBasicMaterial({ vertexColors:true, transparent:true, depthTest:false, depthWrite:false, blending:THREE.AdditiveBlending }));
+  trailLineObj.renderOrder = 0; trailLineObj.frustumCulled = false; scene.add(trailLineObj);
+
+  trailDotGeo = new THREE.BufferGeometry();
+  trailDotGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_MAX * 3), 3));
+  trailDotGeo.setAttribute('customColor', new THREE.BufferAttribute(new Float32Array(TRAIL_MAX * 3), 3));
+  trailDotGeo.setAttribute('size', new THREE.BufferAttribute(new Float32Array(TRAIL_MAX), 1));
+  trailDotObj = new THREE.Points(trailDotGeo, new THREE.ShaderMaterial({ vertexShader:PARTICLE_VERTEX, fragmentShader:PARTICLE_FRAGMENT, uniforms:{}, transparent:true, depthWrite:false, depthTest:false, blending:THREE.AdditiveBlending }));
+  trailDotObj.renderOrder = 3; trailDotObj.frustumCulled = false; scene.add(trailDotObj);
+}
+
+function updateTrails(dt) {
+  if (!trailLineObj) initTrails();
+  const now = performance.now() * 0.001;
+  for (let hi = 0; hi < 2; hi++) {
+    const h = handStates[hi];
+    if (!h.present) { trailHistory[hi].length = 0; continue; }
+    trailHistory[hi].push({x:h.fingertip.x, y:h.fingertip.y, z:h.fingertip.z, t:now});
+    while (trailHistory[hi].length > 60) trailHistory[hi].shift();
+  }
+  const lp = trailLineGeo.attributes.position.array, lc = trailLineGeo.attributes.color.array;
+  const dp = trailDotGeo.attributes.position.array, dc = trailDotGeo.attributes.customColor.array, ds = trailDotGeo.attributes.size.array;
+  let li = 0, di = 0;
+  for (let hi = 0; hi < 2; hi++) {
+    const t = trailHistory[hi];
+    for (let i = 1; i < t.length && li < TRAIL_MAX; i++) {
+      const a = 1 - (now - t[i].t) / TRAIL_LIFE; if (a <= 0) continue;
+      lp[li*6]=t[i-1].x; lp[li*6+1]=t[i-1].y; lp[li*6+2]=t[i-1].z;
+      lp[li*6+3]=t[i].x; lp[li*6+4]=t[i].y; lp[li*6+5]=t[i].z;
+      const cr=hi===0?0:1, cb=hi===0?1:0.5;
+      lc[li*6]=cr*a; lc[li*6+1]=0.5*a; lc[li*6+2]=cb*a;
+      lc[li*6+3]=cr*a; lc[li*6+4]=0.5*a; lc[li*6+5]=cb*a;
+      li++;
+    }
+    if (t.length > 0 && di < TRAIL_MAX) {
+      const l = t[t.length-1], a = 1 - (now - l.t) / TRAIL_LIFE;
+      if (a > 0) { dp[di*3]=l.x; dp[di*3+1]=l.y; dp[di*3+2]=l.z; dc[di*3]=1; dc[di*3+1]=0.5; dc[di*3+2]=1; ds[di]=8*a; di++; }
+    }
+  }
+  trailLineGeo.setDrawRange(0, li*2); trailLineGeo.attributes.position.needsUpdate = true; trailLineGeo.attributes.color.needsUpdate = true;
+  trailDotGeo.setDrawRange(0, di); trailDotGeo.attributes.position.needsUpdate = true; trailDotGeo.attributes.customColor.needsUpdate = true; trailDotGeo.attributes.size.needsUpdate = true;
+}
 
 function updateHandWireframe() {
   let anyHand = false;
@@ -1909,8 +1956,9 @@ function animate(timestamp) {
   // === GPGPU Particle Simulation (GPU physics) ===
   gpgpuSimulate(dt);
 
-  // Hand wireframe (keep)
+  // Hand wireframe + finger trails
   updateHandWireframe();
+  updateTrails(dt);
 
   // Audio update
   updateAudioEngine(dt, { cpuData: new Float32Array(0), count: 0 }, handArray);
@@ -2049,9 +2097,9 @@ setupGPGPU(gpgpuCount);
 
 // Mode switching keyboard
 window.addEventListener('keydown', (e) => {
-  if (e.key === '1') modeManager.switchTo('blackhole');
-  if (e.key === '2') modeManager.switchTo('energy');
-  if (e.key === '3') modeManager.switchTo('flow');
+  if (e.key === '1') modeManager.switchTo('cyber');
+  if (e.key === '2') modeManager.switchTo('scifi');
+  if (e.key === '3') modeManager.switchTo('cosmic');
 });
 
 // Start render loop immediately (nebula always renders)
